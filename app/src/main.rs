@@ -19,9 +19,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 mod diag;
-mod trainer;
+mod rustlings;
 use diag::SharedDiags;
-use trainer::TrainerView;
+use rustlings::RustlingsView;
 
 #[wasm_bindgen]
 extern "C" {
@@ -30,7 +30,7 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, catch)]
     async fn runRust(source: String, status: &JsValue) -> Result<JsValue, JsValue>;
     // Type-check only (rustc --emit metadata) — feeds the in-editor diagnostics
-    // while auto-run is off. Same signature as the trainer's import.
+    // while auto-run is off. Same signature as the Rustlings view's import.
     #[wasm_bindgen(js_namespace = window, catch)]
     async fn checkRust(source: String, isTest: bool, constCheck: String, status: &JsValue)
         -> Result<JsValue, JsValue>;
@@ -649,7 +649,7 @@ fn App() -> impl IntoView {
             <PlaygroundView active=Signal::derive(move || site.get() == Site::Playground) />
         </div>
         <div class="site-view" class:hidden=move || site.get() != Site::Rustlings>
-            <TrainerView active=Signal::derive(move || site.get() == Site::Rustlings) />
+            <RustlingsView active=Signal::derive(move || site.get() == Site::Rustlings) />
         </div>
         <div class="site-view" class:hidden=move || site.get() != Site::About>
             <AboutView />

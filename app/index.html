@@ -7,7 +7,7 @@
   <!-- runner.js FIRST: the Rustlings view calls window.loadExercisesJson immediately
        on mount, so window.* must exist before trunk's wasm bootstrap runs. -->
   <script type="module" src="./runner.js"></script>
-  <link data-trunk rel="rust" data-bin="playground-ui" data-wasm-opt="z" />
+  <link data-trunk rel="rust" data-bin="weblings-ui" data-wasm-opt="z" />
   <!-- Shipped assets (replaces the old `cp -a public/. dist/`): only what is
        linked here reaches dist — the loose sysroot never does, by construction. -->
   <link data-trunk rel="copy-dir" href="public/rustc" />

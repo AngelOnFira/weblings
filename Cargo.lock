@@ -2360,23 +2360,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
-name = "playground-ui"
-version = "0.0.0"
-dependencies = [
- "console_error_panic_hook",
- "eframe",
- "egui",
- "egui_code_editor",
- "js-sys",
- "leptos",
- "serde",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3731,6 +3714,23 @@ dependencies = [
  "objc2 0.6.4",
  "objc2-foundation 0.3.2",
  "url",
+ "web-sys",
+]
+
+[[package]]
+name = "weblings-ui"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "eframe",
+ "egui",
+ "egui_code_editor",
+ "js-sys",
+ "leptos",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
