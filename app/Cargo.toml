@@ -19,11 +19,13 @@ egui_code_editor = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Two front ends share this crate (auto-discovered bins):
-#   src/main.rs      -> bin "weblings-ui" (the Run-and-execute playground)
-#   src/bin/trainer.rs -> bin "trainer"     (the compile-check Rustlings trainer)
-# index.html and trainer.html select their bin via `data-bin`.
+# One bin (src/main.rs -> "weblings-ui"): the single-page site — Playground,
+# Rustlings and About views. index.html selects it via `data-bin`.
 
 [profile.release]
 opt-level = "s"
 
+
+[build-dependencies]
+# Markdown -> HTML for content/*.md at build time (host-only; see build.rs).
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }

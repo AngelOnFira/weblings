@@ -36,6 +36,11 @@ extern "C" {
         -> Result<JsValue, JsValue>;
 }
 
+// Long-form page text is authored in content/*.md and rendered to HTML by
+// build.rs (pulldown-cmark on the host — nothing added to the wasm binary).
+const ABOUT_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/about.html"));
+const HELP_HTML: &str = include_str!(concat!(env!("OUT_DIR"), "/help.html"));
+
 // Phase B: the editor holds PLAIN RUST — full std (Vec/String/HashMap/format!),
 // real println! formatting, compiled and linked entirely in the browser.
 const DEFAULT_SRC: &str = r#"fn main() {
@@ -477,22 +482,7 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
             </div>
 
             {move || help.get().then(|| view! {
-                <div class="pg-help">
-                    <b>"Full-std Rust, entirely in your browser"</b>
-                    <p>
-                        "Plain "<code>"fn main"</code>" programs with the real standard library: "
-                        <code>"println!(\"{}\", x)"</code>", "<code>"Vec"</code>", "<code>"HashMap"</code>", "
-                        <code>"format!"</code>", files (in a sandbox), time — no server. "
-                        <code>"rustc.wasm"</code>" compiles AND links your code in one pass (a forked "
-                        "cranelift backend emits wasm; the built-in riwl linker links it against the "
-                        "std sysroot), then it runs right here under a WASI shim."
-                    </p>
-                    <p>
-                        "Not available: threads, networking, processes. Panics abort with a real message. "
-                        "Click the "<b>"Weblings"</b>" logo for the full story."
-                    </p>
-                    <p>"Your edits are saved in this browser — reload and they'll still be here. \"Reset\" restores the default."</p>
-                </div>
+                <div class="pg-help" inner_html=HELP_HTML></div>
             })}
 
             <div class="pg-body">
@@ -509,81 +499,12 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
 }
 
 /// The ground-up story of how Weblings works — reachable from the brand button.
+/// Content lives in content/about.md; build.rs renders it to HTML.
 #[component]
 fn AboutView() -> impl IntoView {
     view! {
         <div class="about">
-            <div class="about-inner">
-                <h1>"Weblings — real Rust, entirely in your browser"</h1>
-                <p class="about-lead">
-                    "Nothing here talks to a server. The Rust compiler itself runs in this page, "
-                    "compiles your code to WebAssembly, links it, and runs it — all in the time it "
-                    "takes to blink twice. Here is the whole stack, from the ground up."
-                </p>
-
-                <h2>"1. The compiler is a WebAssembly program"</h2>
-                <p>
-                    "A real "<code>"rustc"</code>" (1.96, nightly line) is itself compiled to "
-                    "WebAssembly (wasm32-wasip1, ~84 MB after stripping) and executed in the page "
-                    "under a tiny WASI shim that fakes a filesystem, clocks and stdio in JS. "
-                    "Your code is written into that in-memory filesystem and rustc runs on it "
-                    "exactly like it would on a laptop."
-                </p>
-
-                <h2>"2. A Cranelift backend that emits wasm — no LLVM anywhere"</h2>
-                <p>
-                    "Stock rustc uses LLVM, which is not practical inside a browser. Weblings' rustc "
-                    "carries a forked "<code>"rustc_codegen_cranelift"</code>" backend: Cranelift IR "
-                    "is translated to WebAssembly (via the waffle library's structured-control-flow "
-                    "algorithm) and emitted as standard relocatable wasm object files — the same "
-                    "linking format LLVM uses, so the two toolchains' objects are interchangeable."
-                </p>
-
-                <h2>"3. A pure-Rust linker built into the compiler"</h2>
-                <p>
-                    "A browser can't spawn a linker process, so one is linked INTO rustc.wasm: "
-                    <code>"riwl"</code>", a small pure-Rust wasm linker. One rustc invocation "
-                    "compiles your crate AND links it against the real "<code>"std"</code>" — "
-                    "archive resolution, relocation patching, table/memory layout — in ~30 ms."
-                </p>
-
-                <h2>"4. The standard library is the real one"</h2>
-                <p>
-                    <code>"Vec"</code>", "<code>"HashMap"</code>", "<code>"format!"</code>", files, "
-                    "time: your program links against genuine wasm32-wasip1 std rlibs (LLVM-built, "
-                    "byte-compatible ABI), shipped as one preloaded bundle. Threads, networking and "
-                    "processes don't exist under WASI in a page — everything else is ordinary Rust."
-                </p>
-
-                <h2>"5. Running your program (and your tests)"</h2>
-                <p>
-                    "The linked binary is a normal wasip1 command: it's instantiated with a "
-                    "fresh WASI shim, "<code>"_start"</code>" is called, and stdout streams into the "
-                    "output pane. The whole toolchain runs on a background worker, so the page never "
-                    "freezes — and a compile can be CANCELLED mid-flight by killing its worker, which "
-                    "is how live auto-run recompiles on every keystroke without queueing up stale "
-                    "work. The Rustlings trainer goes further: after the fast type-check, it "
-                    "builds your exercise with "<code>"--test"</code>" and runs the REAL libtest "
-                    "harness — \"done\" means the tests passed, right here."
-                </p>
-
-                <h2>"6. Delivery: pinned artifacts, preloaded once"</h2>
-                <p>
-                    "The compiler and sysroot are built by CI from pinned forks and published as "
-                    "release artifacts; this site downloads them once at page load (the progress "
-                    "card), sha-verified, then the browser cache keeps them. The site itself is "
-                    "100% Rust too: a Leptos + egui UI, with trunk hooks and Rust tool bins doing "
-                    "the fetching, stripping and bundling."
-                </p>
-
-                <h2>"Credits"</h2>
-                <p>
-                    "Built on bjorn3's rustc-on-wasm branches, "<code>"rustc_codegen_cranelift"</code>
-                    " and "<code>"browser_wasi_shim"</code>"; Cranelift by the Bytecode Alliance; "
-                    "structured-control-flow via cfallin's waffle; exercises from rust-lang/rustlings "
-                    "(MIT). The wasm backend, riwl linker, and this site are the Weblings project."
-                </p>
-            </div>
+            <div class="about-inner" inner_html=ABOUT_HTML></div>
         </div>
     }
 }
