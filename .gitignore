@@ -1,0 +1,19 @@
+# Rust build output
+/target
+**/target
+
+# Web build output (regenerable via build.sh)
+**/dist/
+dist-trainer/
+
+# Prebuilt compiler artifacts — pulled by fetch-artifacts.sh from a GitHub Release, never committed
+app/public/rustc/
+app/public/std-sysroot/
+
+# Node / editor / OS
+node_modules/
+.DS_Store
+*.swp
+
+# Playwright verifier screenshots
+verify/screenshots/

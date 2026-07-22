@@ -1,0 +1,6 @@
+[workspace]
+resolver = "2"
+members = ["app", "xtask"]
+
+# app compiles to wasm via trunk; xtask is the native tooling (prep/gen/strip).
+# They share no deps, so per-crate profiles stay independent enough.

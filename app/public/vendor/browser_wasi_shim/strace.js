@@ -1,0 +1,1 @@
+export function strace(imports,no_trace){return new Proxy(imports,{get(target,prop,receiver){const f=Reflect.get(target,prop,receiver);if(no_trace.includes(prop)||typeof f!=="function"){return f}return(...args)=>{console.log(prop,"(",...args,")");const result=Reflect.apply(f,receiver,args);console.log(" =",result);return result}}})}

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Weblings</title>
+  <!-- runner.js FIRST: the Rustlings view calls window.loadExercisesJson immediately
+       on mount, so window.* must exist before trunk's wasm bootstrap runs. -->
+  <script type="module" src="./runner.js"></script>
+  <link data-trunk rel="rust" data-bin="playground-ui" data-wasm-opt="z" />
+  <!-- Shipped assets (replaces the old `cp -a public/. dist/`): only what is
+       linked here reaches dist — the loose sysroot never does, by construction. -->
+  <link data-trunk rel="copy-dir" href="public/rustc" />
+  <link data-trunk rel="copy-dir" href="public/vendor" />
+  <link data-trunk rel="copy-dir" href="public/rustlings" />
+  <link data-trunk rel="copy-file" href="public/runner.js" />
+  <link data-trunk rel="copy-file" href="public/worker.js" />
+  <style>
+    /* Palette mirrors play.rust-lang.org (rust-playground ui/frontend module CSS). */
+    :root{
+      --page:#e1e1db; --ink:#444; --border:#bbb; --radius:4px;
+      --run:#a42; --run-border:#80331a; --run-hover:#8f381c;
+      --editor:#eee; --output:#f9ffff; --err:#bf1b1b;
+      --ui:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+      --mono:"Source Code Pro",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    }
+    *{box-sizing:border-box;}
+    html,body{margin:0;height:100%;background:var(--page);color:var(--ink);font-family:var(--ui);font-size:16px;}
+    body{display:flex;flex-direction:column;height:100vh;}
+    .site-nav{display:flex;align-items:center;gap:.15rem;padding:0 .75rem;background:#33322e;color:#ddd;flex:0 0 2.3rem;}
+    .site-brand{font-weight:700;font-size:.95rem;margin-right:.9rem;letter-spacing:.02em;border:0;background:none;color:#f0e6d2;height:2.3rem;padding:0 .2rem;cursor:pointer;font-family:var(--ui);border-bottom:3px solid transparent;}
+    .site-brand:hover{color:#fff;}
+    .site-brand.cur{border-bottom-color:var(--accent,#a42);}
+    .pg-autorun{display:flex;align-items:center;gap:.3rem;font-size:.78rem;color:#555;text-transform:uppercase;letter-spacing:.02em;padding:0 .5em;cursor:pointer;user-select:none;}
+    .about{height:100%;overflow:auto;background:#fff;}
+    .about-inner{max-width:46rem;margin:0 auto;padding:2.2rem 1.4rem 4rem;line-height:1.6;font-size:1rem;}
+    .about-inner h1{font-size:1.5rem;margin:0 0 .4rem;}
+    .about-inner h2{font-size:1.05rem;margin:1.6rem 0 .3rem;}
+    .about-lead{color:#555;font-size:1.02rem;}
+    .about-inner code{background:#f0f0ec;padding:0 .25em;border-radius:3px;font-family:var(--mono);font-size:.9em;}
+    .site-tab{height:2.3rem;padding:0 1rem;border:0;background:none;color:#bbb;font-family:var(--ui);font-size:.85rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em;cursor:pointer;border-bottom:3px solid transparent;}
+    .site-tab:hover{color:#fff;}
+    .site-tab.cur{color:#fff;border-bottom-color:var(--accent, #a42);}
+    .site-view{flex:1;min-height:0;position:relative;}
+    .site-view.hidden{display:none;}
+    .pg{position:relative;display:flex;flex-direction:column;height:100%;}
+
+    .pg-toolbar{display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;background:var(--page);border-bottom:1px solid var(--border);}
+    .pg-spacer{flex:1;}
+    .pg-tag{font-size:.78rem;color:#666;}
+
+    /* ButtonSet: segmented pills (shared side borders, rounded outer ends). */
+    .btnset{display:inline-flex;}
+    .btnset > .btn{
+      height:2.6em;padding:0 1.15em;border:1px solid var(--border);border-left-width:0;
+      background:#fff;color:var(--ink);font-family:var(--ui);font-size:.85rem;font-weight:600;
+      text-transform:uppercase;letter-spacing:.02em;cursor:pointer;line-height:2.6em;
+    }
+    .btnset > .btn:first-child{border-left-width:1px;border-radius:var(--radius) 0 0 var(--radius);}
+    .btnset > .btn:last-child{border-radius:0 var(--radius) var(--radius) 0;}
+    .btnset > .btn:hover{background:#f3f3f0;}
+    .btnset > .btn:disabled{opacity:.6;cursor:default;}
+    .btn-primary{background:var(--run)!important;border-color:var(--run-border)!important;color:#fff!important;}
+    .btn-primary:hover{background:var(--run-hover)!important;}
+    select.btn{-webkit-appearance:none;appearance:none;padding-right:1.6em;}
+
+    .pg-body{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0;}
+    .pg-editor{width:100%;height:100%;display:block;background:#282828;border-right:1px solid var(--border);}
+    .pg-outpane{display:flex;flex-direction:column;min-height:0;background:var(--output);}
+    .pg-output{flex:1;margin:0;padding:.9rem 1rem;overflow:auto;font-family:var(--mono);font-size:.95rem;line-height:1.5;white-space:pre-wrap;color:#333;}
+    .pg-output.err{color:var(--err);}
+    .pg-status{border-top:1px solid var(--border);padding:.4rem 1rem;font-size:.78rem;color:#666;font-family:var(--mono);min-height:1.7em;}
+
+    .pg-help{position:absolute;top:3.1rem;left:.75rem;z-index:10;max-width:32rem;background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:.4rem 1rem;font-size:.88rem;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.15);}
+    .pg-help p{margin:.5rem 0;}
+    .pg-help code{background:#eee;padding:0 .2em;border-radius:3px;font-family:var(--mono);font-size:.92em;}
+
+    #pg-loading{position:fixed;right:1rem;bottom:2.6rem;z-index:50;display:flex;flex-direction:column;gap:.55rem;background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:.8rem 1rem;box-shadow:0 6px 20px rgba(0,0,0,.15);transition:opacity .3s ease;pointer-events:none;}
+    #pg-loading h2{margin:0;font-size:.85rem;font-weight:600;color:#333;}
+    #pg-loading-track{width:16rem;height:.55rem;background:#e4e4e4;border-radius:999px;overflow:hidden;}
+    #pg-loading-bar{height:100%;width:0%;background:#e6a23c;border-radius:999px;transition:width .15s linear;}
+    #pg-loading-text{font-size:.78rem;color:#666;font-family:var(--mono);}
+    #pg-loading small{font-size:.7rem;color:#999;}
+
+    @media (max-width:720px){
+      .pg-body{grid-template-columns:1fr;grid-template-rows:1fr 1fr;}
+      .pg-editor{border-right:0;border-bottom:1px solid var(--border);}
+    }
+
+    /* ---- Rustlings trainer view ---- */
+    .tr{display:flex;height:100%;}
+    /* Sidebar */
+    .tr-side{width:290px;flex:0 0 290px;display:flex;flex-direction:column;min-height:0;background:#eceae4;border-right:1px solid var(--border);}
+    .tr-brand{padding:.7rem .85rem;font-weight:700;border-bottom:1px solid var(--border);}
+    .tr-sub{display:block;font-weight:400;font-size:.72rem;color:#777;}
+    .tr-progress{padding:.45rem .85rem;font-size:.82rem;color:#666;border-bottom:1px solid var(--border);}
+    .tr-list{flex:1;overflow:auto;padding:.25rem 0;}
+    .tr-item{display:flex;align-items:center;gap:.4rem;width:100%;text-align:left;border:0;background:none;
+      padding:.32rem .85rem;font-family:var(--mono);font-size:.84rem;color:var(--ink);cursor:pointer;border-left:3px solid transparent;}
+    .tr-item:hover{background:#e3e0d8;}
+    .tr-item.cur{background:#dcd8cf;border-left-color:var(--accent);font-weight:600;}
+    .tr-item.done .tr-item-name::before{content:"✓ ";color:var(--ok);font-weight:700;}
+    .tr-item-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+    .tr-badge{font-size:.6rem;text-transform:uppercase;letter-spacing:.03em;background:#d8d2c4;color:#7a6a3a;padding:.02rem .3rem;border-radius:3px;}
+    .tr-attr{display:block;padding:.5rem .85rem;font-size:.68rem;color:#888;border-top:1px solid var(--border);text-decoration:none;}
+    .tr-attr:hover{color:#555;text-decoration:underline;}
+    .tr-clear{display:block;width:100%;text-align:left;padding:.5rem .85rem;font-size:.68rem;color:#a55;background:none;border:0;border-top:1px solid var(--border);cursor:pointer;font-family:var(--ui);}
+    .tr-clear:hover{color:#c33;text-decoration:underline;}
+    /* Main */
+    .tr-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
+    .tr-toolbar{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;border-bottom:1px solid var(--border);}
+    .tr-stat{font-size:.9rem;font-weight:600;}
+    .tr-stat.ok{color:var(--ok);} .tr-stat.warn{color:var(--warn);} .tr-stat.err{color:var(--err);}
+    .tr-spacer{flex:1;}
+    .tr-btn{height:2.2em;padding:0 .85em;border:1px solid var(--border);background:#fff;color:var(--ink);
+      border-radius:var(--radius);font-family:var(--ui);font-size:.84rem;font-weight:600;text-transform:uppercase;cursor:pointer;}
+    .tr-btn:hover{background:#f3f3f0;}
+    .tr-hint{margin:.5rem .75rem 0;padding:.5rem .75rem;background:#fff;border:1px solid var(--border);
+      border-left:3px solid var(--warn);border-radius:var(--radius);font-size:.82rem;white-space:pre-wrap;}
+    .tr-editorwrap{flex:1;min-height:0;padding:.5rem .75rem;}
+    .tr-editor{width:100%;height:100%;display:block;background:#282828;border:1px solid #30363d;border-radius:var(--radius);}
+    .tr-diagwrap{height:34%;min-height:120px;padding:0 .75rem .25rem;}
+    .tr-diag{margin:0;height:100%;overflow:auto;background:#f9ffff;border:1px solid var(--border);border-radius:var(--radius);
+      padding:.6rem .8rem;font-family:var(--mono);font-size:.8rem;line-height:1.45;white-space:pre-wrap;color:#333;}
+    .tr-diag.ok{border-color:#bfe0bf;color:#2e5d2e;} .tr-diag.warn{border-color:#e6cf9a;} .tr-diag.err{border-color:#e6b3b3;color:var(--err);}
+    .tr-statusbar{padding:.35rem .8rem;font-family:var(--mono);font-size:.78rem;color:#666;border-top:1px solid var(--border);min-height:1.6em;}
+    @media (max-width:760px){ .tr-side{width:200px;flex-basis:200px;} }
+  </style>
+</head>
+<body>
+  <!-- Toolchain preload overlay: driven by runner.js's auto-preload (bundle +
+       rustc.wasm with byte progress), removed when ready. Leptos mount_to_body
+       appends alongside it. -->
+  <div id="pg-loading">
+    <h2>Downloading the Rust toolchain</h2>
+    <div id="pg-loading-track"><div id="pg-loading-bar"></div><
+</body>
+</html>

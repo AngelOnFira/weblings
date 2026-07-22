@@ -1,0 +1,28 @@
+# trunk is the single entry point: `trunk serve` (dev) / `trunk build --release`
+# (CI). The hooks below make it self-sufficient — artifacts are fetched/verified/
+# staged by the Rust `prep` bin before every build (a fast no-op once staged).
+
+[build]
+target = "index.html"
+
+[serve]
+# rustc.wasm is single-threaded — no COOP/COEP headers needed.
+addresses = ["127.0.0.1"]
+
+[[hooks]]
+stage = "pre_build"
+command = "cargo"
+command_arguments = [
+    "run", "--quiet", "--release",
+    "--manifest-path", "../xtask/Cargo.toml",
+    "--bin", "prep",
+]
+
+[[hooks]]
+stage = "post_build"
+command = "cargo"
+command_arguments = [
+    "run", "--quiet", "--release",
+    "--manifest-path", "../xtask/Cargo.toml",
+    "--bin", "prep", "--", "--post",
+]

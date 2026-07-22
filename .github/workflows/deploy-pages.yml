@@ -1,0 +1,69 @@
+# Build the client-side Rust playground + Rustlings trainer and deploy to GitHub Pages.
+#
+# CI does NOT build the compiler: the cranelift rustc.wasm and the sysroots are published as
+# GitHub Release assets by the companion `wasm-rustc` repo and pulled by fetch-artifacts.sh
+# (pinned in artifacts.lock) by trunk's pre_build hook (the Rust `prep` bin). Only the
+# Leptos/egui UI + the small native xtask compile here. Runs on manual dispatch or a v* tag.
+name: Deploy playground to Pages
+
+on:
+  workflow_dispatch:      # manual "Run workflow" button
+  push:
+    tags: ['v*']          # and on release tags (e.g. v0.1.0)
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two Pages deploys at once.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4     # code-only; no Git LFS — artifacts come from a Release
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # Cache the eframe/egui/leptos compilation across runs.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            .
+
+      # Cache the fetched compiler artifacts (rustc.wasm + sysroots, ~187 MB) keyed on the lockfile,
+      # so steady-state deploys are a cache hit with zero Release egress.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/riw-artifacts
+          key: riw-artifacts-${{ hashFiles('artifacts.lock') }}
+
+      # Prebuilt trunk binary (it fetches its own wasm-bindgen/wasm-opt at build time).
+      - uses: jetli/trunk-action@v0.5.0
+
+      # trunk is the whole build: its pre_build hook runs the Rust `prep` bin
+      # (fetch + sha-verify + stage artifacts), asset links assemble dist, and
+      # the post_build hook writes CNAME when CNAME_DOMAIN is set.
+      # For a project-Pages deploy set --public-url "/REPO/".
+      - run: trunk build --release
+        working-directory: app
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

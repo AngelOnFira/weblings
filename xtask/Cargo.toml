@@ -1,0 +1,15 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Native site tooling: artifact prep (trunk hook), rustlings bundler, wasm stripper"
+
+[dependencies]
+anyhow = "1"
+ureq = { version = "2", default-features = false, features = ["tls"] }
+sha2 = "0.10"
+tar = "0.4"
+zstd = "0.13"
+serde_json = "1"
+toml = "0.8"
