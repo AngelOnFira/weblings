@@ -9,7 +9,7 @@
 //! (compile on every keystroke) affordable.
 //!
 //! The editor buffer is autosaved to localStorage (`playground_src`) so a reload restores your
-//! work; "Reset" clears the save and returns to the default snippet.
+//! work; picking an example replaces the buffer (and the save) with that snippet.
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
@@ -113,12 +113,6 @@ fn save_src(src: &str) {
         let _ = s.set_item(KEY_SRC, src);
     }
 }
-fn clear_src() {
-    if let Some(s) = storage() {
-        let _ = s.remove_item(KEY_SRC);
-    }
-}
-
 // Auto-run preference (off by default) persists like the buffer does.
 const KEY_AUTORUN: &str = "playground_autorun";
 fn load_autorun() -> bool {
@@ -134,7 +128,7 @@ fn save_autorun(on: bool) {
 }
 
 /// The egui editor app. Shares its text buffer with the Leptos shell via `Rc<RefCell<String>>`,
-/// so "Run"/"Examples"/"Reset" can read/replace it. `on_edit` fires on each keystroke so the
+/// so "Run"/"Examples" can read/replace it. `on_edit` fires on each keystroke so the
 /// shell can debounce-save. egui only repaints on input (idle cost ~0).
 struct EditorApp {
     code: Rc<RefCell<String>>,
@@ -276,7 +270,6 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
         let runs_in_flight = runs_in_flight.clone();
         let apply_diags = apply_diags.clone();
         Rc::new(move || {
-            let t_click = js_sys::Date::now();
             set_status.set("Working...".into());
             let src = code.borrow().clone();
             let runs_in_flight = runs_in_flight.clone();
@@ -307,10 +300,8 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                         let e = get_num(&v, "execMs").unwrap_or(0.0);
                         set_is_err.set(!ok);
                         set_output.set(out);
-                        // std mode reports the in-rustc riwl link time separately;
-                        // the wall time from the click catches everything else
+                        // std mode reports the in-rustc riwl link time separately
                         // (per-stage breakdown is logged to the console by runner.js).
-                        let wall = (js_sys::Date::now() - t_click).round() as i64;
                         set_status.set(match l {
                             Some(l) => format!(
                                 "compiled in {} ms, linked in {} ms, executed in {} ms",
@@ -469,18 +460,6 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
         }
     };
 
-    let on_reset = {
-        let code = code.clone();
-        let egui_ctx = egui_ctx.clone();
-        move |_| {
-            clear_src();
-            *code.borrow_mut() = DEFAULT_SRC.to_string();
-            if let Some(ctx) = egui_ctx.borrow().as_ref() {
-                ctx.request_repaint();
-            }
-        }
-    };
-
     view! {
         <div class="pg">
             <div class="pg-toolbar">
@@ -494,7 +473,6 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                         <option value="fizzbuzz">"Example: FizzBuzz"</option>
                         <option value="fib">"Example: Fibonacci"</option>
                     </select>
-                    <button class="btn" on:click=on_reset>"Reset"</button>
                     <label class="pg-autorun" title="Compile & run on every keystroke; a newer keystroke cancels the compile in flight.">
                         <input
                             type="checkbox"

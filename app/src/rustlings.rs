@@ -547,10 +547,6 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
             select(idx);
         }
     };
-    let on_check = {
-        let run_check = run_check.clone();
-        move |_| run_check()
-    };
     let on_solution = {
         let code = code.clone();
         let exercises = exercises.clone();
@@ -604,9 +600,7 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
     view! {
         <div class="tr">
             <aside class="tr-side">
-                <div class="tr-brand">
-                    "Rustlings" <span class="tr-sub">"client-side compile trainer"</span>
-                </div>
+                <div class="tr-brand">"Rustlings"</div>
                 <div class="tr-progress">
                     {move || format!("{} / {} done", done.with(|d| d.len()), list_meta.get().len())}
                 </div>
@@ -632,9 +626,6 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
                     }}
                 </div>
                 <button class="tr-clear" on:click=on_clear_all>"Clear all saved progress"</button>
-                <a class="tr-attr" href="./rustlings/LICENSE-rustlings" target="_blank">
-                    "exercises: rust-lang/rustlings v6.4.0 (MIT)"
-                </a>
             </aside>
 
             <main class="tr-main">
@@ -643,7 +634,6 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
                         {move || stat_label(stat.get(), cur_test.get(), cur_passed.get(), cur_threads_unsup.get())}
                     </span>
                     <div class="tr-spacer"></div>
-                    <button class="tr-btn" on:click=on_check>"Check"</button>
                     <button class="tr-btn" on:click=move |_| set_show_hint.update(|h| *h = !*h)>"Hint"</button>
                     <button class="tr-btn" on:click=on_solution>"Solution"</button>
                     <button class="tr-btn" on:click=on_reset>"Reset"</button>
