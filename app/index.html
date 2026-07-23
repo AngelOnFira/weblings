@@ -26,7 +26,8 @@
     }
     *{box-sizing:border-box;}
     html,body{margin:0;height:100%;background:var(--page);color:var(--ink);font-family:var(--ui);font-size:16px;}
-    body{display:flex;flex-direction:column;height:100vh;}
+    /* The app is a fixed viewport-height column; panes scroll internally, never the page. */
+    body{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
     .site-nav{display:flex;align-items:center;gap:.15rem;padding:0 .75rem;background:#33322e;color:#ddd;flex:0 0 2.3rem;}
     .site-brand{font-weight:700;font-size:.95rem;margin-right:.9rem;letter-spacing:.02em;border:0;background:none;color:#f0e6d2;height:2.3rem;padding:0 .2rem;cursor:pointer;font-family:var(--ui);border-bottom:3px solid transparent;}
     .site-brand:hover{color:#fff;}
@@ -47,7 +48,6 @@
 
     .pg-toolbar{display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;background:var(--page);border-bottom:1px solid var(--border);}
     .pg-spacer{flex:1;}
-    .pg-tag{font-size:.78rem;color:#666;}
 
     /* ButtonSet: segmented pills (shared side borders, rounded outer ends). */
     .btnset{display:inline-flex;}
@@ -67,8 +67,12 @@
     .pg-body{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0;}
     .pg-editor{width:100%;height:100%;display:block;background:#282828;border-right:1px solid var(--border);}
     .pg-outpane{display:flex;flex-direction:column;min-height:0;background:var(--output);}
-    .pg-output{flex:1;margin:0;padding:.9rem 1rem;overflow:auto;font-family:var(--mono);font-size:.95rem;line-height:1.5;white-space:pre-wrap;color:#333;}
+    /* min-height:0 lets long output scroll inside the pane instead of growing the page. */
+    .pg-output{flex:1;min-height:0;margin:0;padding:.9rem 1rem;overflow:auto;font-family:var(--mono);font-size:.95rem;line-height:1.5;white-space:pre-wrap;color:#333;}
     .pg-output.err{color:var(--err);}
+    .pg-trunc{display:flex;align-items:center;gap:.75rem;border-top:1px solid var(--border);padding:.45rem 1rem;font-size:.82rem;color:#666;font-family:var(--mono);}
+    .pg-trunc button{height:2em;padding:0 .9em;border:1px solid var(--border);border-radius:var(--radius);background:#fff;color:var(--ink);font-family:var(--ui);font-size:.78rem;font-weight:600;cursor:pointer;}
+    .pg-trunc button:hover{background:#f3f3f0;}
     .pg-status{border-top:1px solid var(--border);padding:.4rem 1rem;font-size:.78rem;color:#666;font-family:var(--mono);min-height:1.7em;}
 
     .pg-help{position:absolute;top:3.1rem;left:.75rem;z-index:10;max-width:32rem;background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:.4rem 1rem;font-size:.88rem;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.15);}

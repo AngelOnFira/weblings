@@ -245,7 +245,7 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
     let (list_meta, set_list_meta) = signal(Vec::<(usize, String, bool)>::new()); // (idx, name, test)
     let (current, set_current) = signal(0usize);
     let (diag_text, set_diag_text) = signal(String::new());
-    let (status, set_status) = signal(String::from("Loading exercises + compiler…"));
+    let (status, set_status) = signal(String::from("Loading exercises + compiler..."));
     let (stat, set_stat) = signal(Stat::Todo);
     let (cur_test, set_cur_test) = signal(false);
     let (cur_passed, set_cur_passed) = signal::<Option<u32>>(None);
@@ -276,7 +276,7 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
             };
             let src = code.borrow().clone();
             let has_todo = src.contains("todo!(");
-            set_status.set("Type-checking…".into());
+            set_status.set("Type-checking...".into());
             let diags = diags.clone();
             let egui_ctx = egui_ctx.clone();
             spawn_local(async move {

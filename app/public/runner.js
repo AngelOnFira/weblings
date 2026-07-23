@@ -120,13 +120,13 @@ window.preloadRust = function (onProgress) {
     if (bar && total) bar.style.width = Math.min(100, (received / total) * 100).toFixed(1) + "%";
     if (text) text.textContent = total
       ? `${fmtMB(received)} / ${fmtMB(total)} MB`
-      : `${fmtMB(received)} MB…`;
+        : `${fmtMB(received)} MB...`;
   }).then(() => done(null), (e) => done(e && e.message ? e.message : String(e)));
 }
 
 async function ensureReady(status) {
   if (!rustcModule) {
-    status && status("Downloading toolchain…");
+    status && status("Downloading toolchain...");
     try {
       await window.preloadRust();
     } catch (e) {
@@ -241,6 +241,17 @@ window.checkRust = (source, isTest, constCheck, status) =>
   submit("check", { source, isTest, constCheck }, asStatusCb(status));
 
 window.runTests = (source, status) => submit("tests", { source }, asStatusCb(status));
+
+// Save `text` as a file download (the UI truncates huge program output and
+// offers the full text through this).
+window.downloadText = (filename, text) => {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
 // Bundled Rustlings exercises (raw JSON text for serde_json on the Rust side) —
 // preloaded with everything else; falls back to a direct fetch.

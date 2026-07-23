@@ -1,6 +1,8 @@
-# Weblings — real Rust, entirely in your browser
+# Weblings, a toolchain to compile Rust in the browser
 
-Nothing here talks to a server. The Rust compiler itself runs in this page,
+Weblings lets you compile and execute Rust code directly in the browser.
+
+<!--Nothing here talks to a server. The Rust compiler itself runs in this page,
 compiles your code to WebAssembly, links it, and runs it — all in the time it
 takes to blink twice. Here is the whole stack, from the ground up.
 
@@ -59,4 +61,4 @@ Built on bjorn3's rustc-on-wasm branches, `rustc_codegen_cranelift` and
 `browser_wasi_shim`; Cranelift by the Bytecode Alliance;
 structured-control-flow via cfallin's waffle; exercises from
 rust-lang/rustlings (MIT). The wasm backend, riwl linker, and this site are the
-Weblings project.
+Weblings project.-->

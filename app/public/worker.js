@@ -77,7 +77,7 @@ async function initEngine(msg) {
 
 // ---- run: compile+link (one rustc.wasm invocation) then execute -------------
 async function runJob(msg, status) {
-  status("Compiling + linking with rustc.wasm…");
+  status("Compiling + linking with rustc.wasm...");
   const tEnter = performance.now();
   let log = "";
   const dec0 = new TextDecoder();
@@ -143,7 +143,7 @@ async function runJob(msg, status) {
     return { ok: false, diagnostics, output: msgOut || `rustc exited ${exit} without emitting a program`, compileMs, execMs: 0 };
   }
 
-  status("Running…");
+  status("Running...");
   let progOut = "";
   const dec1 = new TextDecoder();
   const CapOut = class extends Fd {
@@ -208,7 +208,7 @@ function parseDiagnostics(log) {
 }
 
 async function checkJob(msg, status) {
-  status("Type-checking…");
+  status("Type-checking...");
 
   // Optional const-eval verifier: appended anonymous const whose assertions rustc
   // EVALUATES at compile time — a wrong answer becomes an E0080 compile error.
@@ -268,7 +268,7 @@ async function checkJob(msg, status) {
 // failure don't run. WASI has no threads: thread-spawn failures are detected
 // and reported as { unsupported: "threads" }.
 async function testsJob(msg, status) {
-  status("Building tests…");
+  status("Building tests...");
 
   const dec = new TextDecoder();
   let log = "";
@@ -294,7 +294,7 @@ async function testsJob(msg, status) {
     return { ok: false, phase: "compile", output: log.replaceAll("/work/prog.rs", "exercise").trim(), compileMs, execMs: 0 };
   }
 
-  status("Running tests…");
+  status("Running tests...");
   let out = "";
   class CapT extends Fd {
     fd_write(data) { out += dec.decode(data, { stream: true }); return { ret: 0, nwritten: data.byteLength }; }

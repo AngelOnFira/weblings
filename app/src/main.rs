@@ -34,7 +34,18 @@ extern "C" {
     #[wasm_bindgen(js_namespace = window, catch)]
     async fn checkRust(source: String, isTest: bool, constCheck: String, status: &JsValue)
         -> Result<JsValue, JsValue>;
+    // Saves `text` as a file download named `filename` (blob URL + anchor click).
+    #[wasm_bindgen(js_namespace = window)]
+    fn downloadText(filename: String, text: String);
+    // Toolchain preload (idempotent; same promise runner.js awaits internally).
+    #[wasm_bindgen(js_namespace = window, catch)]
+    async fn preloadRust(on_progress: &JsValue) -> Result<JsValue, JsValue>;
 }
+
+// Rendering the full output of a chatty program (hundreds of thousands of
+// lines) into the <pre> stalls layout for seconds; past this many lines the
+// pane shows a prefix and offers the rest as a download.
+const MAX_OUTPUT_LINES: usize = 1000;
 
 // Long-form page text is authored in content/*.md and rendered to HTML by
 // build.rs (pulldown-cmark on the host — nothing added to the wasm binary).
@@ -215,10 +226,20 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
     let egui_ctx: Rc<RefCell<Option<egui::Context>>> = Rc::new(RefCell::new(None));
     let generation = Rc::new(Cell::new(0u64));
 
-    let (output, set_output) = signal(String::from(
-        "Press Run to compile & execute. The first run downloads rustc.wasm (~92 MB, cached after).",
-    ));
+    // Replaced by the first auto-run's result; until the toolchain is fetched
+    // (progress overlay bottom-right) this is what the output pane shows.
+    let (output, set_output) = signal(String::from("Waiting for compiler download..."));
     let (status, set_status) = signal(String::new());
+    // What the <pre> actually renders: (visible prefix, hidden line count).
+    // Splitting on the Nth newline is a byte scan — no per-line allocation.
+    let shown = Memo::new(move |_| {
+        output.with(|o| match o.match_indices('\n').nth(MAX_OUTPUT_LINES - 1) {
+            Some((idx, _)) if idx + 1 < o.len() => {
+                (o[..idx].to_string(), o[idx + 1..].lines().count())
+            }
+            _ => (o.clone(), 0),
+        })
+    });
     let (is_err, set_is_err) = signal(false);
     let (help, set_help) = signal(false);
 
@@ -256,7 +277,7 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
         let apply_diags = apply_diags.clone();
         Rc::new(move || {
             let t_click = js_sys::Date::now();
-            set_status.set("Working…".into());
+            set_status.set("Working...".into());
             let src = code.borrow().clone();
             let runs_in_flight = runs_in_flight.clone();
             let apply_diags = apply_diags.clone();
@@ -292,17 +313,15 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                         let wall = (js_sys::Date::now() - t_click).round() as i64;
                         set_status.set(match l {
                             Some(l) => format!(
-                                "compiled in {} ms · linked in {} ms · executed in {} ms · {} ms from click",
+                                "compiled in {} ms, linked in {} ms, executed in {} ms",
                                 c.round() as i64,
                                 l.round() as i64,
                                 e.round() as i64,
-                                wall
                             ),
                             None => format!(
-                                "compiled in {} ms · executed in {} ms · {} ms from click",
+                                "compiled in {} ms, executed in {} ms",
                                 c.round() as i64,
                                 e.round() as i64,
-                                wall
                             ),
                         });
                     }
@@ -385,6 +404,7 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
         let egui_ctx = egui_ctx.clone();
         let on_edit = on_edit.clone();
         let diags = diags.clone();
+        let run_now = run_now.clone();
         Effect::new(move |started: Option<bool>| {
             if started == Some(true) {
                 return true;
@@ -414,6 +434,16 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                     )
                     .await;
             });
+            // First compile happens on load with whatever is in the buffer —
+            // submitted only once the toolchain is ready. Submitting earlier
+            // would park it behind the download, where the Rustlings view's
+            // boot-time check (submitted later) supersedes it in the pool's
+            // newest-wins ordering and the run resolves { cancelled }.
+            let run_now = run_now.clone();
+            spawn_local(async move {
+                let _ = preloadRust(&JsValue::NULL).await;
+                run_now();
+            });
             true
         });
     }
@@ -422,6 +452,7 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
     let on_example = {
         let code = code.clone();
         let egui_ctx = egui_ctx.clone();
+        let run_now = run_now.clone();
         move |ev: leptos::ev::Event| {
             let src = match event_target_value(&ev).as_str() {
                 "fizzbuzz" => EX_FIZZBUZZ,
@@ -434,6 +465,7 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
             if let Some(ctx) = egui_ctx.borrow().as_ref() {
                 ctx.request_repaint();
             }
+            run_now();
         }
     };
 
@@ -478,7 +510,6 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                     <button class="btn" on:click=move |_| set_help.update(|h| *h = !*h)>"?"</button>
                 </div>
                 <div class="pg-spacer"></div>
-                <span class="pg-tag">"100% client-side · rustc + riwl in wasm"</span>
             </div>
 
             {move || help.get().then(|| view! {
@@ -489,8 +520,19 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                 <canvas class="pg-editor" tabindex="0" node_ref=canvas_ref></canvas>
                 <div class="pg-outpane">
                     <pre class="pg-output" id="output" class:err=move || is_err.get()>
-                        {move || output.get()}
+                        {move || shown.get().0}
                     </pre>
+                    {move || {
+                        let hidden = shown.get().1;
+                        (hidden > 0).then(|| view! {
+                            <div class="pg-trunc">
+                                <span>{format!("... {hidden} more lines")}</span>
+                                <button on:click=move |_| {
+                                    downloadText("output.txt".into(), output.get_untracked())
+                                }>"Download full output"</button>
+                            </div>
+                        })
+                    }}
                     <div class="pg-status" id="status">{move || status.get()}</div>
                 </div>
             </div>
