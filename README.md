@@ -77,4 +77,4 @@ compiler backend. Here are a few things on my mind:
 
 AI tooling was used to create the Leptos web UI, the Cranelift -> [Waffle
 IR](https://github.com/bytecodealliance/waffle) translation, the WASM linker,
-and various other scripts. Written content in this repo is human made.
+and various other scripts. `*.md` files in this repo are human made.
