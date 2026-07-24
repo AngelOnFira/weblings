@@ -20,7 +20,7 @@
     :root{
       --page:#e1e1db; --ink:#444; --border:#bbb; --radius:4px;
       --run:#a42; --run-border:#80331a; --run-hover:#8f381c;
-      --editor:#eee; --output:#f9ffff; --err:#bf1b1b;
+      --editor:#eee; --output:#f9ffff; --err:#bf1b1b; --warn:#9c6a03; --ok:#2e7d32;
       --ui:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
       --mono:"Source Code Pro",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
     }
@@ -69,7 +69,28 @@
     .pg-outpane{display:flex;flex-direction:column;min-height:0;background:var(--output);}
     /* min-height:0 lets long output scroll inside the pane instead of growing the page. */
     .pg-output{flex:1;min-height:0;margin:0;padding:.9rem 1rem;overflow:auto;font-family:var(--mono);font-size:.95rem;line-height:1.5;white-space:pre-wrap;color:#333;}
-    .pg-output.err{color:var(--err);}
+    /* Collapsible output sections (Errors / Standard Error / Standard Output). */
+    .pg-sec-head{display:block;width:100%;text-align:left;border:0;background:none;padding:.1rem 0;margin:0 0 .15rem;
+      font-family:var(--ui);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#999;cursor:pointer;}
+    .pg-sec-head:hover{color:#444;}
+    .pg-sec-body{margin:0 0 .9rem;font:inherit;white-space:pre-wrap;}
+    .pg-sec-body.collapsed{display:none;}
+    .pg-output .err{color:var(--err);}
+    .pg-output .warn{color:var(--warn);}
+    /* Cargo-style diagnostics: rustc's own ANSI colors converted to spans.
+       `.ansi` (after .err/.warn: it must win) neutralizes the block-level
+       severity tint so only the tokens rustc colored are colored; the fg-*
+       palette mirrors a terminal's, adjusted for the light background. */
+    .pg-output .ansi{color:#333;}
+    .pg-output .b{font-weight:700;}
+    .pg-output .fg-red{color:var(--err);}
+    .pg-output .fg-yellow{color:var(--warn);}
+    .pg-output .fg-green{color:var(--ok);}
+    .pg-output .fg-blue{color:#0a66c2;}
+    .pg-output .fg-cyan{color:#0b7285;}
+    .pg-output .fg-magenta{color:#9c36b5;}
+    .pg-output .fg-black{color:#333;}
+    .pg-output .fg-white{color:#333;}
     .pg-trunc{display:flex;align-items:center;gap:.75rem;border-top:1px solid var(--border);padding:.45rem 1rem;font-size:.82rem;color:#666;font-family:var(--mono);}
     .pg-trunc button{height:2em;padding:0 .9em;border:1px solid var(--border);border-radius:var(--radius);background:#fff;color:var(--ink);font-family:var(--ui);font-size:.78rem;font-weight:600;cursor:pointer;}
     .pg-trunc button:hover{background:#f3f3f0;}

@@ -89,7 +89,7 @@ async function runJob(msg, status) {
     "rustc", "/work/prog.rs", "--sysroot", "/sysroot",
     "-Zunstable-options", "--target", "wasm32-wasip1",
     "--edition", "2024", "-O", "-Cpanic=abort",
-    "--error-format=json",
+    "--error-format=json", "--json=diagnostic-rendered-ansi",
     "-o", "/work/prog.wasm",
   ];
   const fds = [new CapErr(), new CapErr(), new CapErr(), new PreopenDirectory("/tmp", []), stdSysrootPreopen(), work];
@@ -134,25 +134,35 @@ async function runJob(msg, status) {
   const diagnostics = parseDiagnostics(log).map((d) => ({
     ...d,
     rendered: d.rendered.replaceAll("/work/prog.rs", "program"),
+    ansi: d.ansi.replaceAll("/work/prog.rs", "program"),
   }));
   const bin = work.dir.contents.get("prog.wasm");
   if (!bin || !bin.data || bin.data.length === 0) {
-    const msgOut = diagnostics.length
-      ? diagnostics.map((d) => d.rendered).join("\n")
-      : log.replaceAll("/work/prog.rs", "program").trim();
-    return { ok: false, diagnostics, output: msgOut || `rustc exited ${exit} without emitting a program`, compileMs, execMs: 0 };
+    // The frontend renders `diagnostics` itself (severity-colored); `stderr`
+    // carries only the non-diagnostic residue — raw stderr for ICEs/traps
+    // where rustc produced no JSON diagnostics at all.
+    const residue = diagnostics.length
+      ? ""
+      : (log.replaceAll("/work/prog.rs", "program").trim()
+         || `rustc exited ${exit} without emitting a program`);
+    return { ok: false, compileFailed: true, diagnostics, stdout: "", stderr: residue, exit, compileMs, execMs: 0 };
   }
 
   status("Running...");
   let progOut = "";
+  let progErr = "";
   const dec1 = new TextDecoder();
+  const dec2 = new TextDecoder();
   const CapOut = class extends Fd {
     fd_write(data) { progOut += dec1.decode(data, { stream: true }); return { ret: 0, nwritten: data.byteLength }; }
   };
+  const CapErrStream = class extends Fd {
+    fd_write(data) { progErr += dec2.decode(data, { stream: true }); return { ret: 0, nwritten: data.byteLength }; }
+  };
   const t1 = performance.now();
-  const pfds = [new CapOut(), new CapOut(), new CapOut(), new PreopenDirectory("/sandbox", [])];
+  const pfds = [new CapOut(), new CapOut(), new CapErrStream(), new PreopenDirectory("/sandbox", [])];
   const pw = new WASI(["prog"], [], pfds, { debug: false });
-  const finish = (ok, output, progInstantiateMs, execMs) => {
+  const finish = (ok, exitCode, runtimeError, progInstantiateMs, execMs) => {
     const stages = {
       setupMs: +setupMs.toFixed(1),
       rustcInstantiateMs: +rustcInstantiateMs.toFixed(1),
@@ -164,7 +174,13 @@ async function runJob(msg, status) {
     };
     console.log("[playground] stages:", JSON.stringify(stages), linkPhases ? "link phases: " + JSON.stringify(linkPhases) : "");
     // diagnostics: warnings survive successful compiles — the editor shows them.
-    return { ok, output, diagnostics, compileMs, linkMs, linkPhases, execMs, stages, totalMs: stages.totalMs };
+    return {
+      ok, stdout: progOut.trimEnd(),
+      // Panic locations point at the internal path — remap like diagnostics.
+      stderr: progErr.replaceAll("/work/prog.rs", "program").trim(),
+      exit: exitCode, runtimeError,
+      diagnostics, compileMs, linkMs, linkPhases, execMs, stages, totalMs: stages.totalMs,
+    };
   };
   try {
     const tPI = performance.now();
@@ -175,14 +191,15 @@ async function runJob(msg, status) {
     const tRun = performance.now();
     const rc = pw.start(instance);
     const execMs = performance.now() - tRun;
-    return finish(rc === 0, progOut.trimEnd() + (rc !== 0 ? `\n[exit code ${rc}]` : ""), progInstantiateMs, execMs);
+    return finish(rc === 0, rc, null, progInstantiateMs, execMs);
   } catch (e) {
-    const msgOut = progOut.trimEnd() + "\n[runtime error: " + (e && e.message ? e.message : e) + "]";
-    return finish(false, msgOut.trim(), 0, performance.now() - t1);
+    return finish(false, null, String((e && e.message) || e), 0, performance.now() - t1);
   }
 }
 
 // ---- check: type-check only (--emit metadata), structured diagnostics -------
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
 function parseDiagnostics(log) {
   const out = [];
   for (const line of log.split("\n")) {
@@ -193,6 +210,10 @@ function parseDiagnostics(log) {
     if (d.level !== "error" && d.level !== "warning") continue;
     const spans = d.spans || [];
     const sp = spans.find((s) => s.is_primary) || spans[0] || null;
+    // --json=diagnostic-rendered-ansi: `rendered` carries rustc's own terminal
+    // colors. `ansi` keeps them (the output pane converts them to HTML);
+    // `rendered` is the stripped plain text (editor tooltips, trainer pane).
+    const ansi = (d.rendered || d.message).trimEnd();
     out.push({
       level: d.level,
       message: d.message,
@@ -201,7 +222,8 @@ function parseDiagnostics(log) {
       col: sp ? sp.column_start : null,
       endLine: sp ? sp.line_end : null,
       endCol: sp ? sp.column_end : null,
-      rendered: (d.rendered || d.message).trimEnd(),
+      rendered: ansi.replace(ANSI_RE, ""),
+      ansi,
     });
   }
   return out;
@@ -226,7 +248,7 @@ async function checkJob(msg, status) {
     "rustc", "/work/prog.rs", "--sysroot", "/sysroot",
     "--target", "wasm32-wasip1", "--edition", "2024",
     "--emit", "metadata", "-o", "/work/libprog.rmeta",
-    "--error-format=json",
+    "--error-format=json", "--json=diagnostic-rendered-ansi",
   ];
   // Test-mode exercises: type-check the #[cfg(test)] module too (does NOT run tests).
   if (msg.isTest) args.push("--test");
@@ -250,6 +272,7 @@ async function checkJob(msg, status) {
   const diagnostics = parseDiagnostics(log).map((d) => ({
     ...d,
     rendered: d.rendered.replaceAll("/work/prog.rs", "program"),
+    ansi: d.ansi.replaceAll("/work/prog.rs", "program"),
   }));
   const errorCount = diagnostics.filter((d) => d.level === "error").length;
   const warningCount = diagnostics.filter((d) => d.level === "warning").length;

@@ -18,6 +18,7 @@ use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+mod ansi;
 mod diag;
 mod rustlings;
 use diag::SharedDiags;
@@ -25,7 +26,8 @@ use rustlings::RustlingsView;
 
 #[wasm_bindgen]
 extern "C" {
-    // Defined by public/runner.js. Returns { ok, output, compileMs, execMs }.
+    // Defined by public/runner.js. Returns { ok, stdout, stderr, exit,
+    // runtimeError, compileFailed?, diagnostics, compileMs, execMs, ... }.
     // `status` is a JS callback invoked with progress strings (download phase mostly).
     #[wasm_bindgen(js_namespace = window, catch)]
     async fn runRust(source: String, status: &JsValue) -> Result<JsValue, JsValue>;
@@ -46,6 +48,101 @@ extern "C" {
 // lines) into the <pre> stalls layout for seconds; past this many lines the
 // pane shows a prefix and offers the rest as a download.
 const MAX_OUTPUT_LINES: usize = 1000;
+
+/// One severity-colored run of text in the output pane: `Plain` for program
+/// stdout, `Warn`/`Err` for rustc diagnostics and failure text.
+#[derive(Clone, Copy, PartialEq)]
+enum SegKind {
+    Plain,
+    Warn,
+    Err,
+}
+type Segs = Vec<(SegKind, String)>;
+
+/// Segments are stored separator-inclusive: every non-final segment ends in
+/// '\n' (matching the old `join("\n")`), so render/download/truncation are
+/// plain concatenation.
+fn seal_segs(mut segs: Segs) -> Segs {
+    let n = segs.len();
+    for (i, (_, s)) in segs.iter_mut().enumerate() {
+        if i + 1 < n && !s.ends_with('\n') {
+            s.push('\n');
+        }
+    }
+    segs
+}
+
+/// One run's output, split rust-playground-style into collapsible sections.
+#[derive(Clone, PartialEq)]
+struct RunOut {
+    /// false only for the boot placeholder (shown headerless).
+    ran: bool,
+    /// Failure summary: "Exited with status N" / "Runtime error: …" /
+    /// "Compilation failed".
+    errors: Option<String>,
+    /// Compiler diagnostics (ANSI-colored segments) + program stderr.
+    stderr: Segs,
+    stdout: String,
+}
+
+/// First `max` lines of the segment list (the cut can land mid-segment) +
+/// hidden line count — the old whole-pane truncation, per section now.
+fn truncate_segs(segs: &Segs, max: usize) -> (Segs, usize) {
+    let mut budget = max;
+    let mut vis: Segs = Vec::new();
+    let mut hidden = 0usize;
+    for (k, s) in segs {
+        if budget == 0 {
+            hidden += s.lines().count();
+            continue;
+        }
+        let nls = s.match_indices('\n').count();
+        if nls < budget {
+            budget -= nls;
+            vis.push((*k, s.clone()));
+        } else {
+            match s.match_indices('\n').nth(budget - 1) {
+                Some((idx, _)) if idx + 1 < s.len() => {
+                    vis.push((*k, s[..idx].to_string()));
+                    hidden += s[idx + 1..].lines().count();
+                }
+                // The budget-th newline is the segment's final byte: keep it
+                // whole; later segments are fully hidden.
+                _ => vis.push((*k, s.clone())),
+            }
+            budget = 0;
+        }
+    }
+    (vis, hidden)
+}
+
+fn truncate_str(s: &str, max: usize) -> (String, usize) {
+    match s.match_indices('\n').nth(max - 1) {
+        Some((idx, _)) if idx + 1 < s.len() => {
+            (s[..idx].to_string(), s[idx + 1..].lines().count())
+        }
+        _ => (s.to_string(), 0),
+    }
+}
+
+/// One output segment: severity class, with rustc's ANSI colors converted to
+/// HTML when present (the `ansi` class neutralizes the severity tint so only
+/// the tokens rustc colored are colored).
+fn seg_view(k: SegKind, s: String) -> AnyView {
+    let class = match k {
+        SegKind::Plain => "",
+        SegKind::Warn => "warn",
+        SegKind::Err => "err",
+    };
+    if ansi::has_ansi(&s) {
+        view! {
+            <span class=format!("{class} ansi") inner_html=ansi::ansi_to_html(&s)></span>
+        }
+        .into_any()
+    } else {
+        view! { <span class=class>{s}</span> }.into_any()
+    }
+}
 
 // Long-form page text is authored in content/*.md and rendered to HTML by
 // build.rs (pulldown-cmark on the host — nothing added to the wasm binary).
@@ -222,19 +319,28 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
 
     // Replaced by the first auto-run's result; until the toolchain is fetched
     // (progress overlay bottom-right) this is what the output pane shows.
-    let (output, set_output) = signal(String::from("Waiting for compiler download..."));
+    let (output, set_output) = signal(RunOut {
+        ran: false,
+        errors: None,
+        stderr: Vec::new(),
+        stdout: "Waiting for compiler download...".into(),
+    });
     let (status, set_status) = signal(String::new());
-    // What the <pre> actually renders: (visible prefix, hidden line count).
-    // Splitting on the Nth newline is a byte scan — no per-line allocation.
+    // What the pane actually renders: each section truncated to its own
+    // MAX_OUTPUT_LINES budget (byte scans, no per-line allocation), plus the
+    // combined hidden line count for the "... N more lines" row.
     let shown = Memo::new(move |_| {
-        output.with(|o| match o.match_indices('\n').nth(MAX_OUTPUT_LINES - 1) {
-            Some((idx, _)) if idx + 1 < o.len() => {
-                (o[..idx].to_string(), o[idx + 1..].lines().count())
-            }
-            _ => (o.clone(), 0),
+        output.with(|o| {
+            let (stderr, hid_err) = truncate_segs(&o.stderr, MAX_OUTPUT_LINES);
+            let (stdout, hid_out) = truncate_str(&o.stdout, MAX_OUTPUT_LINES);
+            (RunOut { ran: o.ran, errors: o.errors.clone(), stderr, stdout }, hid_err + hid_out)
         })
     });
-    let (is_err, set_is_err) = signal(false);
+    // Per-section collapse toggles — sticky across runs, so collapsing the
+    // compiler noise stays collapsed during auto-run.
+    let (sec_errors, set_sec_errors) = signal(true);
+    let (sec_stderr, set_sec_stderr) = signal(true);
+    let (sec_stdout, set_sec_stdout) = signal(true);
     let (help, set_help) = signal(false);
 
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
@@ -293,13 +399,51 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                         // markers stay fresh in auto-run mode without separate
                         // checks (which would fight the runs in the pool).
                         apply_diags(&v);
-                        let ok = get_bool(&v, "ok").unwrap_or(true);
-                        let out = get_str(&v, "output").unwrap_or_else(|| "(no output)".into());
+                        let compile_failed = get_bool(&v, "compileFailed") == Some(true);
+                        // Standard Error: compiler diagnostics (rustc's own
+                        // order — warnings stay visible even when the run
+                        // succeeds), then the program's stderr / ICE residue.
+                        let mut stderr: Segs = diag::parse_output_diags(&v)
+                            .into_iter()
+                            .map(|(is_err, rendered)| {
+                                (if is_err { SegKind::Err } else { SegKind::Warn }, rendered)
+                            })
+                            .collect();
+                        match get_str(&v, "stderr") {
+                            Some(se) if !se.is_empty() => stderr.push((
+                                if compile_failed { SegKind::Err } else { SegKind::Plain },
+                                se,
+                            )),
+                            _ => {}
+                        }
+                        // Engine errors (worker catch-all) arrive in the old
+                        // `output` field with no stdout/stderr/diagnostics.
+                        match get_str(&v, "output") {
+                            Some(o) if !o.is_empty() => stderr.push((SegKind::Err, o)),
+                            _ => {}
+                        }
+                        // Errors section: the failure summary, playground-style.
+                        let errors = if compile_failed {
+                            Some("Compilation failed".to_string())
+                        } else if let Some(re) = get_str(&v, "runtimeError") {
+                            Some(format!("Runtime error: {re}"))
+                        } else {
+                            match get_num(&v, "exit") {
+                                Some(code) if code != 0.0 => {
+                                    Some(format!("Exited with status {}", code as i64))
+                                }
+                                _ => None,
+                            }
+                        };
                         let c = get_num(&v, "compileMs").unwrap_or(0.0);
                         let l = get_num(&v, "linkMs");
                         let e = get_num(&v, "execMs").unwrap_or(0.0);
-                        set_is_err.set(!ok);
-                        set_output.set(out);
+                        set_output.set(RunOut {
+                            ran: true,
+                            errors,
+                            stderr: seal_segs(stderr),
+                            stdout: get_str(&v, "stdout").unwrap_or_default(),
+                        });
                         // std mode reports the in-rustc riwl link time separately
                         // (per-stage breakdown is logged to the console by runner.js).
                         set_status.set(match l {
@@ -317,8 +461,12 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                         });
                     }
                     Err(e) => {
-                        set_is_err.set(true);
-                        set_output.set(format!("error: {e:?}"));
+                        set_output.set(RunOut {
+                            ran: true,
+                            errors: Some(format!("error: {e:?}")),
+                            stderr: Vec::new(),
+                            stdout: String::new(),
+                        });
                         set_status.set(String::new());
                     }
                 }
@@ -497,16 +645,84 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
             <div class="pg-body">
                 <canvas class="pg-editor" tabindex="0" node_ref=canvas_ref></canvas>
                 <div class="pg-outpane">
-                    <pre class="pg-output" id="output" class:err=move || is_err.get()>
-                        {move || shown.get().0}
-                    </pre>
+                    <div class="pg-output" id="output">
+                        {move || {
+                            let (o, _) = shown.get();
+                            if !o.ran {
+                                // Boot placeholder: bare text, no section chrome.
+                                return view! { <pre class="pg-sec-body">{o.stdout}</pre> }
+                                    .into_any();
+                            }
+                            view! {
+                                {o.errors.map(|e| view! {
+                                    <div class="pg-sec">
+                                        <button
+                                            class="pg-sec-head"
+                                            on:click=move |_| set_sec_errors.update(|v| *v = !*v)
+                                        >
+                                            {move || if sec_errors.get() { "▾ Errors" } else { "▸ Errors" }}
+                                        </button>
+                                        <pre
+                                            class="pg-sec-body err"
+                                            class:collapsed=move || !sec_errors.get()
+                                        >{e}</pre>
+                                    </div>
+                                })}
+                                {(!o.stderr.is_empty()).then(|| view! {
+                                    <div class="pg-sec">
+                                        <button
+                                            class="pg-sec-head"
+                                            on:click=move |_| set_sec_stderr.update(|v| *v = !*v)
+                                        >
+                                            {move || if sec_stderr.get() { "▾ Standard Error" } else { "▸ Standard Error" }}
+                                        </button>
+                                        <pre
+                                            class="pg-sec-body"
+                                            class:collapsed=move || !sec_stderr.get()
+                                        >
+                                            {o.stderr.into_iter().map(|(k, s)| seg_view(k, s)).collect_view()}
+                                        </pre>
+                                    </div>
+                                })}
+                                <div class="pg-sec">
+                                    <button
+                                        class="pg-sec-head"
+                                        on:click=move |_| set_sec_stdout.update(|v| *v = !*v)
+                                    >
+                                        {move || if sec_stdout.get() { "▾ Standard Output" } else { "▸ Standard Output" }}
+                                    </button>
+                                    <pre
+                                        class="pg-sec-body"
+                                        id="stdout"
+                                        class:collapsed=move || !sec_stdout.get()
+                                    >{o.stdout}</pre>
+                                </div>
+                            }.into_any()
+                        }}
+                    </div>
                     {move || {
                         let hidden = shown.get().1;
                         (hidden > 0).then(|| view! {
                             <div class="pg-trunc">
                                 <span>{format!("... {hidden} more lines")}</span>
                                 <button on:click=move |_| {
-                                    downloadText("output.txt".into(), output.get_untracked())
+                                    let o = output.get_untracked();
+                                    let mut full = String::new();
+                                    if let Some(e) = &o.errors {
+                                        full.push_str("--- Errors ---\n");
+                                        full.push_str(e);
+                                        full.push_str("\n\n");
+                                    }
+                                    if !o.stderr.is_empty() {
+                                        full.push_str("--- Standard Error ---\n");
+                                        for (_, s) in &o.stderr {
+                                            full.push_str(&ansi::strip_ansi(s));
+                                        }
+                                        full.push_str("\n\n");
+                                    }
+                                    full.push_str("--- Standard Output ---\n");
+                                    full.push_str(&o.stdout);
+                                    downloadText("output.txt".into(), full)
                                 }>"Download full output"</button>
                             </div>
                         })

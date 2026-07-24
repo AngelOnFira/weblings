@@ -19,6 +19,8 @@ pub struct Diag {
     pub col: usize,
     pub end_line: usize,
     pub end_col: usize,
+    /// rustc's rendered text, with its ANSI colors when available — the hover
+    /// tooltip decodes them into colored runs.
     pub rendered: String,
 }
 
@@ -50,8 +52,32 @@ pub fn parse_diags(result: &JsValue) -> Vec<Diag> {
                 col: get_num(&d, "col").unwrap_or(1.0) as usize,
                 end_line: get_num(&d, "endLine").unwrap_or(line as f64) as usize,
                 end_col: get_num(&d, "endCol").unwrap_or(0.0) as usize,
-                rendered: get_str(&d, "rendered").unwrap_or_default(),
+                rendered: get_str(&d, "ansi")
+                    .or_else(|| get_str(&d, "rendered"))
+                    .unwrap_or_default(),
             })
+        })
+        .collect()
+}
+
+/// `(is_error, rendered)` for EVERY diagnostic — span-less ones included
+/// ("aborting due to N previous errors" has nothing to point at in the
+/// editor but belongs in the output pane). Prefers the `ansi` variant
+/// (rustc's own terminal colors, converted to HTML by the output pane).
+pub fn parse_output_diags(result: &JsValue) -> Vec<(bool, String)> {
+    let arr = match js_sys::Reflect::get(result, &JsValue::from_str("diagnostics")) {
+        Ok(a) if js_sys::Array::is_array(&a) => js_sys::Array::from(&a),
+        _ => return Vec::new(),
+    };
+    arr.iter()
+        .filter_map(|d| {
+            let rendered = get_str(&d, "ansi")
+                .or_else(|| get_str(&d, "rendered"))
+                .unwrap_or_default();
+            if rendered.is_empty() {
+                return None;
+            }
+            Some((get_str(&d, "level").as_deref() == Some("error"), rendered))
         })
         .collect()
 }
@@ -71,6 +97,31 @@ pub fn publish_counts(diags: &[Diag]) {
 
 const ERROR_COLOR: egui::Color32 = egui::Color32::from_rgb(0xfb, 0x49, 0x34); // gruvbox red
 const WARN_COLOR: egui::Color32 = egui::Color32::from_rgb(0xfa, 0xbd, 0x2f); // gruvbox yellow
+
+/// Tooltip colors for the 8 ANSI hues (`ansi::Run.color` order). The tooltip
+/// follows egui's theme (system light/dark), not the always-dark editor, so
+/// there is one palette per background: gruvbox tones on dark, the output
+/// pane's palette (index.html fg-*) on light.
+const ANSI_TOOLTIP_DARK: [egui::Color32; 8] = [
+    egui::Color32::from_rgb(0x92, 0x83, 0x74), // black → gruvbox gray
+    ERROR_COLOR,                               // red
+    egui::Color32::from_rgb(0xb8, 0xbb, 0x26), // green
+    WARN_COLOR,                                // yellow
+    egui::Color32::from_rgb(0x83, 0xa5, 0x98), // blue
+    egui::Color32::from_rgb(0xd3, 0x86, 0x9b), // magenta
+    egui::Color32::from_rgb(0x8e, 0xc0, 0x7c), // cyan
+    egui::Color32::from_rgb(0xeb, 0xdb, 0xb2), // white → gruvbox fg
+];
+const ANSI_TOOLTIP_LIGHT: [egui::Color32; 8] = [
+    egui::Color32::from_rgb(0x6a, 0x6a, 0x6a), // black → gray
+    egui::Color32::from_rgb(0xbf, 0x1b, 0x1b), // red (--err)
+    egui::Color32::from_rgb(0x2e, 0x7d, 0x32), // green (--ok)
+    egui::Color32::from_rgb(0x9c, 0x6a, 0x03), // yellow (--warn)
+    egui::Color32::from_rgb(0x0a, 0x66, 0xc2), // blue
+    egui::Color32::from_rgb(0x9c, 0x36, 0xb5), // magenta
+    egui::Color32::from_rgb(0x0b, 0x72, 0x85), // cyan
+    egui::Color32::from_rgb(0x33, 0x33, 0x33), // white → ink
+];
 
 /// Paint markers over the editor and show a tooltip for the hovered line.
 /// `pane` is the full editor pane rect (for the gutter x and hover band).
@@ -138,11 +189,33 @@ pub fn paint_diags(
         )
         .show(|ui| {
             ui.set_max_width(560.0);
+            let font = egui::FontId::monospace(12.0);
             for (i, d) in hovered.iter().enumerate() {
                 if i > 0 {
                     ui.separator();
                 }
-                ui.label(egui::RichText::new(&d.rendered).monospace().size(12.0));
+                // Cargo-style colors: decode the ANSI runs rustc rendered.
+                // (No bold face in egui's default fonts — colorless bold
+                // runs, like the message text, brighten instead.)
+                let palette = if ui.visuals().dark_mode {
+                    &ANSI_TOOLTIP_DARK
+                } else {
+                    &ANSI_TOOLTIP_LIGHT
+                };
+                let mut job = egui::text::LayoutJob::default();
+                for run in crate::ansi::parse_runs(&d.rendered) {
+                    let color = match run.color {
+                        Some(idx) => palette[idx],
+                        None if run.bold => ui.visuals().strong_text_color(),
+                        None => ui.visuals().text_color(),
+                    };
+                    job.append(
+                        &run.text,
+                        0.0,
+                        egui::TextFormat { font_id: font.clone(), color, ..Default::default() },
+                    );
+                }
+                ui.label(job);
             }
         });
     }
