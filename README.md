@@ -59,7 +59,7 @@ There is also the question of why to use Cranelift instead of LLVM as the
 compiler backend. Here are a few things on my mind:
 
 - LLVM would be a larger toolchain to include (I think)
-- Cranelift is faster to get (I did not test numbers)
+- Cranelift is faster to compile (I did not test this)
 - The whole toolchain in Rust is pretty neat!
 
 ## Prior art

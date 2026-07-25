@@ -14,7 +14,9 @@ use std::time::Duration;
 use leptos::prelude::*;
 use serde::Deserialize;
 
+use crate::Pane;
 use crate::diag::{self, SharedDiags};
+use crate::editor::{self, EditorHandle, EditorPrefs};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -170,72 +172,16 @@ fn stat_label(s: Stat, test: bool, passed: Option<u32>, threads_unsupported: boo
     }
 }
 
-/// egui editor sharing its buffer with the Leptos shell; calls `on_edit` when the user types.
-struct EditorApp {
-    code: Rc<RefCell<String>>,
-    on_edit: Rc<dyn Fn()>,
-    diags: SharedDiags,
-}
-
-impl eframe::App for EditorApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Same treatment as the playground editor: Gruvbox, panel filled with
-        // the editor background so the field reaches the bottom, rows=1 so
-        // line numbers follow the content, full-pane hover/focus ring.
-        let theme = egui_code_editor::ColorTheme::GRUVBOX;
-        let frame = egui::Frame::central_panel(ui.style()).fill(theme.bg());
-        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-            let pane = ui.max_rect();
-            let v = &mut ui.style_mut().visuals;
-            v.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-            v.widgets.hovered.bg_stroke = egui::Stroke::NONE;
-            v.widgets.active.bg_stroke = egui::Stroke::NONE;
-            v.selection.stroke = egui::Stroke::NONE;
-            let mut text = self.code.borrow_mut();
-            let out = egui_code_editor::CodeEditor::default()
-                .id_source("trainer-editor")
-                .with_rows(1)
-                .with_fontsize(15.0)
-                .with_theme(theme)
-                .with_numlines(true)
-                .show(ui, &mut *text, &egui_code_editor::Syntax::rust());
-            let changed = out.response.changed();
-            drop(text);
-            if changed {
-                (self.on_edit)();
-            }
-            diag::paint_diags(ui, pane, &out, &self.diags.borrow());
-            let rest = ui.available_size();
-            if rest.y > 0.0 {
-                let (_, resp) = ui.allocate_exact_size(rest, egui::Sense::click());
-                if resp.clicked() {
-                    ui.memory_mut(|m| m.request_focus(out.response.id));
-                }
-            }
-            let hovered = ui.rect_contains_pointer(pane);
-            let focused = out.response.has_focus();
-            if hovered || focused {
-                let color = if focused {
-                    egui::Color32::from_gray(170)
-                } else {
-                    egui::Color32::from_gray(110)
-                };
-                ui.painter().rect_stroke(
-                    pane.shrink(0.5),
-                    egui::CornerRadius::ZERO,
-                    egui::Stroke::new(1.0, color),
-                    egui::StrokeKind::Inside,
-                );
-            }
-        });
-    }
-}
-
 #[component]
-pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
+pub fn RustlingsView(
+    active: Signal<bool>,
+    narrow: Signal<bool>,
+    touch: Signal<bool>,
+    prefs: EditorPrefs,
+) -> impl IntoView {
     // Shared, non-reactive state.
-    let code = Rc::new(RefCell::new(String::new()));
-    let egui_ctx: Rc<RefCell<Option<egui::Context>>> = Rc::new(RefCell::new(None));
+    let ed = EditorHandle::new(String::new());
+    let code = ed.code.clone();
     let exercises: Rc<RefCell<Vec<Exercise>>> = Rc::new(RefCell::new(Vec::new()));
     let generation = Rc::new(Cell::new(0u64));
     // In-editor diagnostics (squiggles/tooltips), fed by the checkRust results.
@@ -256,15 +202,18 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
     // Sidebar clicks can only capture Send signal-setters inside the reactive list; route the chosen
     // index through this signal and run the (!Send) `select` from an Effect.
     let (select_req, set_select_req) = signal::<Option<usize>>(None);
-
-    let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
+    // Narrow layout: the exercise list becomes an off-canvas drawer, and the
+    // editor / diagnostics are tabbed instead of stacked.
+    let drawer = RwSignal::new(false);
+    let (pane, set_pane) = signal(Pane::Code);
+    let (out_badge, set_out_badge) = signal(false);
 
     // The core type-check action (reads the live buffer + current exercise).
     let run_check: Rc<dyn Fn()> = {
         let code = code.clone();
         let exercises = exercises.clone();
         let diags = diags.clone();
-        let egui_ctx = egui_ctx.clone();
+        let egui_ctx = ed.egui_ctx.clone();
         Rc::new(move || {
             let idx = current.get_untracked();
             let ex = {
@@ -433,9 +382,8 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
 
     // Select an exercise: load its source into the editor, repaint egui, run an immediate check.
     let select: Rc<dyn Fn(usize)> = {
-        let code = code.clone();
+        let ed = ed.clone();
         let exercises = exercises.clone();
-        let egui_ctx = egui_ctx.clone();
         let run_check = run_check.clone();
         let diags = diags.clone();
         Rc::new(move |idx: usize| {
@@ -447,7 +395,7 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
                 }
             };
             // Prefer a saved in-progress draft over the pristine exercise body.
-            *code.borrow_mut() = load_draft(&ex.name).unwrap_or_else(|| ex.exercise.clone());
+            ed.set(load_draft(&ex.name).unwrap_or_else(|| ex.exercise.clone()));
             set_current.set(idx);
             set_cur_test.set(ex.test);
             set_cur_passed.set(None);
@@ -458,51 +406,9 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
             set_diag_text.set(String::new());
             diags.borrow_mut().clear();
             diag::publish_counts(&diags.borrow());
-            if let Some(ctx) = egui_ctx.borrow().as_ref() {
-                ctx.request_repaint();
-            }
             run_check();
         })
     };
-
-    // Boot the egui editor onto the canvas once it mounts.
-    {
-        let code = code.clone();
-        let egui_ctx = egui_ctx.clone();
-        let on_edit = on_edit.clone();
-        let diags = diags.clone();
-        Effect::new(move |started: Option<bool>| {
-            if started == Some(true) {
-                return true;
-            }
-            // Boot egui only once this view is (or has been) shown — starting
-            // eframe on a display:none canvas gives it a 0x0 surface.
-            if !active.get() {
-                return false;
-            }
-            let Some(canvas) = canvas_ref.get() else {
-                return false;
-            };
-            let code = code.clone();
-            let egui_ctx = egui_ctx.clone();
-            let on_edit = on_edit.clone();
-            let diags = diags.clone();
-            spawn_local(async move {
-                let _ = eframe::WebRunner::new()
-                    .start(
-                        canvas,
-                        eframe::WebOptions::default(),
-                        Box::new(move |cc| {
-                            cc.egui_ctx.set_visuals(egui::Visuals::dark());
-                            *egui_ctx.borrow_mut() = Some(cc.egui_ctx.clone());
-                            Ok(Box::new(EditorApp { code, on_edit, diags }))
-                        }),
-                    )
-                    .await;
-            });
-            true
-        });
-    }
 
     // Load exercises once, then select the first.
     {
@@ -548,9 +454,8 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
         }
     };
     let on_solution = {
-        let code = code.clone();
+        let ed = ed.clone();
         let exercises = exercises.clone();
-        let egui_ctx = egui_ctx.clone();
         let run_check = run_check.clone();
         move |_| {
             let (name, sol) = {
@@ -561,12 +466,9 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
                 }
             };
             if let Some(sol) = sol {
-                *code.borrow_mut() = sol.clone();
                 // Programmatic change won't fire on_edit, so persist the revealed solution.
                 save_draft(&name, &sol);
-                if let Some(ctx) = egui_ctx.borrow().as_ref() {
-                    ctx.request_repaint();
-                }
+                ed.set(sol);
                 run_check();
             }
         }
@@ -580,15 +482,27 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
         }
     };
 
-    // Run `select` whenever the sidebar sets a new index.
+    // Run `select` whenever the sidebar sets a new index. Every selection —
+    // sidebar tap, prev/next — funnels through here, so it is also the one
+    // place the drawer needs closing.
     {
         let select = select.clone();
         Effect::new(move |_| {
             if let Some(idx) = select_req.get() {
+                drawer.set(false);
                 select(idx);
             }
         });
     }
+
+    // Narrow layout: a failing check dots the Output tab rather than yanking
+    // the user out of the editor (run_check fires 200 ms after every keystroke,
+    // so switching panes here would be unbearable).
+    Effect::new(move |_| {
+        if stat.get() == Stat::Error && pane.get_untracked() == Pane::Code {
+            set_out_badge.set(true);
+        }
+    });
 
     let stat_class = move || match stat.get() {
         Stat::Done => "ok",
@@ -598,8 +512,15 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
     };
 
     view! {
-        <div class="tr">
-            <aside class="tr-side">
+        <div
+            class="tr"
+            class:show-code=move || pane.get() == Pane::Code
+            class:show-out=move || pane.get() == Pane::Out
+        >
+            {move || (narrow.get() && drawer.get()).then(|| view! {
+                <div class="tr-scrim" on:click=move |_| drawer.set(false)></div>
+            })}
+            <aside class="tr-side" class:open=move || drawer.get()>
                 <div class="tr-brand">"Rustlings"</div>
                 <div class="tr-progress">
                     {move || format!("{} / {} done", done.with(|d| d.len()), list_meta.get().len())}
@@ -630,13 +551,53 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
 
             <main class="tr-main">
                 <div class="tr-toolbar">
+                    // Drawer toggle + step buttons: CSS shows these only under
+                    // html.is-narrow, where the sidebar is off-canvas.
+                    <button
+                        class="tr-btn tr-menu"
+                        title="Exercises"
+                        on:click=move |_| drawer.update(|d| *d = !*d)
+                    >"☰"</button>
                     <span class=move || format!("tr-stat {}", stat_class())>
                         {move || stat_label(stat.get(), cur_test.get(), cur_passed.get(), cur_threads_unsup.get())}
                     </span>
                     <div class="tr-spacer"></div>
+                    <button
+                        class="tr-btn tr-step"
+                        title="Previous exercise"
+                        on:click=move |_| {
+                            let i = current.get_untracked();
+                            if i > 0 { set_select_req.set(Some(i - 1)); }
+                        }
+                    >"‹"</button>
+                    <button
+                        class="tr-btn tr-step"
+                        title="Next exercise"
+                        on:click=move |_| {
+                            let i = current.get_untracked();
+                            if i + 1 < list_meta.with_untracked(|m| m.len()) {
+                                set_select_req.set(Some(i + 1));
+                            }
+                        }
+                    >"›"</button>
+                    {editor::editor_settings(prefs, "tr-btn")}
                     <button class="tr-btn" on:click=move |_| set_show_hint.update(|h| *h = !*h)>"Hint"</button>
                     <button class="tr-btn" on:click=on_solution>"Solution"</button>
                     <button class="tr-btn" on:click=on_reset>"Reset"</button>
+                </div>
+
+                <div class="pg-tabs" role="tablist">
+                    <button
+                        class="pg-tab"
+                        class:cur=move || pane.get() == Pane::Code
+                        on:click=move |_| set_pane.set(Pane::Code)
+                    >"Code"</button>
+                    <button
+                        class="pg-tab"
+                        class:cur=move || pane.get() == Pane::Out
+                        class:badge=move || out_badge.get()
+                        on:click=move |_| { set_pane.set(Pane::Out); set_out_badge.set(false); }
+                    >"Output"</button>
                 </div>
 
                 {move || show_hint.get().then(|| view! {
@@ -644,7 +605,16 @@ pub fn RustlingsView(active: Signal<bool>) -> impl IntoView {
                 })}
 
                 <div class="tr-editorwrap">
-                    <canvas class="tr-editor" tabindex="0" node_ref=canvas_ref></canvas>
+                    {editor::code_editor(
+                        ed.clone(),
+                        on_edit.clone(),
+                        diags.clone(),
+                        active,
+                        touch,
+                        "trainer-editor",
+                        "tr-editor",
+                        "tr-editor-text",
+                    )}
                 </div>
 
                 <div class="tr-diagwrap">
