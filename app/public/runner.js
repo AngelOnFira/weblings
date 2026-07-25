@@ -114,9 +114,19 @@ window.preloadRust = function (onProgress) {
       setTimeout(() => el.remove(), 350);
     }
   };
+  let sizeShown = false;
   window.preloadRust((received, total) => {
     const bar = document.getElementById("pg-loading-bar");
     const text = document.getElementById("pg-loading-text");
+    // Quote the real total once we know it, rather than hard-coding a number in
+    // index.html that would drift when the artifacts are rebuilt.
+    if (total && !sizeShown) {
+      const size = document.getElementById("pg-loading-size");
+      if (size) {
+        size.textContent = `${fmtMB(total)} MB`;
+        sizeShown = true;
+      }
+    }
     if (bar && total) bar.style.width = Math.min(100, (received / total) * 100).toFixed(1) + "%";
     if (text) text.textContent = total
       ? `${fmtMB(received)} / ${fmtMB(total)} MB`

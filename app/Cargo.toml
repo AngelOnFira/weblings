@@ -9,7 +9,13 @@ leptos = { version = "0.7", features = ["csr"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window", "Storage", "Location"] }
+# MediaQueryList/HtmlTextAreaElement/DomTokenList also arrive transitively (via
+# eframe and tachys), but this crate uses them directly — don't depend on another
+# crate's feature list.
+web-sys = { version = "0.3", features = [
+    "HtmlCanvasElement", "HtmlTextAreaElement", "HtmlElement", "Window", "Storage", "Location",
+    "MediaQueryList", "Element", "DomTokenList", "CssStyleDeclaration",
+] }
 console_error_panic_hook = "0.1"
 # Pure-Rust editor: egui rendered to a canvas via eframe (glow/WebGL2 backend).
 eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts"] }

@@ -8,6 +8,8 @@ target = "index.html"
 [serve]
 # rustc.wasm is single-threaded — no COOP/COEP headers needed.
 addresses = ["127.0.0.1"]
+# The verify/*.mjs scripts default to http://127.0.0.1:8090/.
+port = 8090
 
 [[hooks]]
 stage = "pre_build"

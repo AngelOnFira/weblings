@@ -20,9 +20,19 @@ use wasm_bindgen_futures::spawn_local;
 
 mod ansi;
 mod diag;
+mod editor;
 mod rustlings;
 use diag::SharedDiags;
+use editor::{EditorHandle, EditorPrefs};
 use rustlings::RustlingsView;
+
+/// Which half of a view is on screen. Only meaningful in the narrow layout,
+/// where the two panes are tabbed instead of side by side.
+#[derive(Clone, Copy, PartialEq)]
+pub enum Pane {
+    Code,
+    Out,
+}
 
 #[wasm_bindgen]
 extern "C" {
@@ -224,82 +234,6 @@ fn save_autorun(on: bool) {
     }
 }
 
-/// The egui editor app. Shares its text buffer with the Leptos shell via `Rc<RefCell<String>>`,
-/// so "Run"/"Examples" can read/replace it. `on_edit` fires on each keystroke so the
-/// shell can debounce-save. egui only repaints on input (idle cost ~0).
-struct EditorApp {
-    code: Rc<RefCell<String>>,
-    on_edit: Rc<dyn Fn()>,
-    diags: SharedDiags,
-}
-
-impl eframe::App for EditorApp {
-    // egui/eframe 0.35: App exposes `ui` (a Ui, not a Context); CodeEditor takes the syntax as a
-    // `show` argument (no `with_syntax` builder in egui_code_editor 0.3.7).
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Gruvbox: warm dark (#282828) — softer than GitHub Dark's near-black.
-        let theme = egui_code_editor::ColorTheme::GRUVBOX;
-        // Panel painted in the editor's own background: the code field reaches
-        // the bottom of the pane even when the text is short. `with_rows(1)`
-        // keeps line numbers tied to actual content (+1 after the trailing
-        // newline) instead of padding numbers down the whole pane.
-        let frame = egui::Frame::central_panel(ui.style()).fill(theme.bg());
-        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-            let pane = ui.max_rect();
-            // The TextEdit's own hover/focus box only wraps the text rows;
-            // suppress it and draw our own around the WHOLE pane (below).
-            let v = &mut ui.style_mut().visuals;
-            v.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-            v.widgets.hovered.bg_stroke = egui::Stroke::NONE;
-            v.widgets.active.bg_stroke = egui::Stroke::NONE;
-            v.selection.stroke = egui::Stroke::NONE; // focus ring (selection bg is set by the theme)
-            let mut text = self.code.borrow_mut();
-            let out = egui_code_editor::CodeEditor::default()
-                .id_source("editor")
-                .with_rows(1)
-                .with_fontsize(15.0)
-                .with_theme(theme)
-                .with_numlines(true)
-                .show(ui, &mut *text, &egui_code_editor::Syntax::rust());
-            let changed = out.response.changed();
-            drop(text);
-            if changed {
-                (self.on_edit)();
-            }
-            diag::paint_diags(ui, pane, &out, &self.diags.borrow());
-            // Clicking the empty area below the text focuses the editor.
-            let rest = ui.available_size();
-            if rest.y > 0.0 {
-                let (_, resp) = ui.allocate_exact_size(rest, egui::Sense::click());
-                if resp.clicked() {
-                    ui.memory_mut(|m| m.request_focus(out.response.id));
-                }
-            }
-            // Full-pane hover/focus ring: "you are in the code area".
-            let hovered = ui.rect_contains_pointer(pane);
-            let focused = out.response.has_focus();
-            if hovered || focused {
-                let color = if focused {
-                    egui::Color32::from_gray(170)
-                } else {
-                    egui::Color32::from_gray(110)
-                };
-                ui.painter().rect_stroke(
-                    pane.shrink(0.5),
-                    egui::CornerRadius::ZERO,
-                    egui::Stroke::new(1.0, color),
-                    egui::StrokeKind::Inside,
-                );
-            }
-        });
-    }
-}
-
-fn configure_style(ctx: &egui::Context) {
-    // The code pane is ALWAYS dark (Rust-Playground style); page chrome stays light.
-    ctx.set_visuals(egui::Visuals::dark());
-}
-
 fn get_str(v: &JsValue, k: &str) -> Option<String> {
     js_sys::Reflect::get(v, &JsValue::from_str(k)).ok().and_then(|x| x.as_string())
 }
@@ -310,11 +244,31 @@ fn get_bool(v: &JsValue, k: &str) -> Option<bool> {
     js_sys::Reflect::get(v, &JsValue::from_str(k)).ok().and_then(|x| x.as_bool())
 }
 
+/// One-line summary of the current diagnostics for the touch-mode strip under
+/// the textarea: the counts, plus the first error's own headline. `.0` is
+/// "there is at least one error" (the strip tints red).
+fn diag_headline(ds: &[diag::Diag]) -> Option<(bool, String)> {
+    let first = ds.iter().find(|d| d.is_error).or_else(|| ds.first())?;
+    let errors = ds.iter().filter(|d| d.is_error).count();
+    let warnings = ds.len() - errors;
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
+    let mut counts = Vec::new();
+    if errors > 0 {
+        counts.push(format!("{errors} error{}", plural(errors)));
+    }
+    if warnings > 0 {
+        counts.push(format!("{warnings} warning{}", plural(warnings)));
+    }
+    let rendered = ansi::strip_ansi(&first.rendered);
+    let head = rendered.lines().next().unwrap_or_default().trim();
+    Some((errors > 0, format!("{}  ·  line {}: {head}", counts.join(", "), first.line)))
+}
+
 #[component]
-fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
+fn PlaygroundView(active: Signal<bool>, touch: Signal<bool>, prefs: EditorPrefs) -> impl IntoView {
     // Restore the last-edited buffer (or the default snippet on first visit).
-    let code = Rc::new(RefCell::new(load_src()));
-    let egui_ctx: Rc<RefCell<Option<egui::Context>>> = Rc::new(RefCell::new(None));
+    let ed = EditorHandle::new(load_src());
+    let code = ed.code.clone();
     let generation = Rc::new(Cell::new(0u64));
 
     // Replaced by the first auto-run's result; until the toolchain is fetched
@@ -343,7 +297,15 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
     let (sec_stdout, set_sec_stdout) = signal(true);
     let (help, set_help) = signal(false);
 
-    let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
+    // Narrow layout only: which pane the Code/Output tabs are showing, and
+    // whether the Output tab should wear an "there are errors over here" dot.
+    let (pane, set_pane) = signal(Pane::Code);
+    let (out_badge, set_out_badge) = signal(false);
+    // Touch only: the latest check's headline. Without the canvas there are no
+    // squiggles and no hover tooltips, and with auto-run off (the default) the
+    // debounced check's text never reaches the output pane — so a type error
+    // would otherwise produce no visible feedback at all until you press Run.
+    let (editnote, set_editnote) = signal::<Option<(bool, String)>>(None);
 
     let (autorun, set_autorun) = signal(load_autorun());
 
@@ -356,10 +318,14 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
 
     let apply_diags = {
         let diags = diags.clone();
-        let egui_ctx = egui_ctx.clone();
+        let egui_ctx = ed.egui_ctx.clone();
         Rc::new(move |v: &JsValue| {
             let ds = diag::parse_diags(v);
             diag::publish_counts(&ds);
+            set_editnote.set(diag_headline(&ds));
+            if pane.get_untracked() == Pane::Code && ds.iter().any(|d| d.is_error) {
+                set_out_badge.set(true);
+            }
             *diags.borrow_mut() = ds;
             if let Some(ctx) = egui_ctx.borrow().as_ref() {
                 ctx.request_repaint();
@@ -438,6 +404,11 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                         let c = get_num(&v, "compileMs").unwrap_or(0.0);
                         let l = get_num(&v, "linkMs");
                         let e = get_num(&v, "execMs").unwrap_or(0.0);
+                        // Narrow layout: if the user is looking at the code,
+                        // dot the Output tab rather than yanking them over.
+                        if pane.get_untracked() == Pane::Code && errors.is_some() {
+                            set_out_badge.set(true);
+                        }
                         set_output.set(RunOut {
                             ran: true,
                             errors,
@@ -473,9 +444,17 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
             });
         })
     };
+    // Pressing Run reveals the output pane (narrow layout only — the class is
+    // inert on desktop). This lives here and NOT in `run_now`, which auto-run
+    // calls on every keystroke: doing it there would yank the pane away as you
+    // type.
     let on_run = {
         let run_now = run_now.clone();
-        move |_| run_now()
+        move |_| {
+            set_pane.set(Pane::Out);
+            set_out_badge.set(false);
+            run_now()
+        }
     };
 
     // Per keystroke: with auto-run on, submit a compile IMMEDIATELY — the
@@ -537,47 +516,23 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
         })
     };
 
-    // Boot the egui editor onto the canvas exactly once, after it mounts.
+    // First compile happens on load with whatever is in the buffer — submitted
+    // only once the toolchain is ready. Submitting earlier would park it behind
+    // the download, where the Rustlings view's boot-time check (submitted later)
+    // supersedes it in the pool's newest-wins ordering and the run resolves
+    // { cancelled }.
+    //
+    // This is deliberately NOT part of the editor's boot: the editor may be a
+    // textarea (no eframe at all), and the toolchain still has to be fetched.
     {
-        let code = code.clone();
-        let egui_ctx = egui_ctx.clone();
-        let on_edit = on_edit.clone();
-        let diags = diags.clone();
         let run_now = run_now.clone();
-        Effect::new(move |started: Option<bool>| {
-            if started == Some(true) {
+        Effect::new(move |done: Option<bool>| {
+            if done == Some(true) {
                 return true;
             }
-            // Boot egui only once this view is (or has been) shown — starting
-            // eframe on a display:none canvas gives it a 0x0 surface.
             if !active.get() {
                 return false;
             }
-            let Some(canvas) = canvas_ref.get() else {
-                return false;
-            };
-            let code = code.clone();
-            let egui_ctx = egui_ctx.clone();
-            let on_edit = on_edit.clone();
-            let diags = diags.clone();
-            spawn_local(async move {
-                let _ = eframe::WebRunner::new()
-                    .start(
-                        canvas,
-                        eframe::WebOptions::default(),
-                        Box::new(move |cc| {
-                            configure_style(&cc.egui_ctx);
-                            *egui_ctx.borrow_mut() = Some(cc.egui_ctx.clone());
-                            Ok(Box::new(EditorApp { code, on_edit, diags }))
-                        }),
-                    )
-                    .await;
-            });
-            // First compile happens on load with whatever is in the buffer —
-            // submitted only once the toolchain is ready. Submitting earlier
-            // would park it behind the download, where the Rustlings view's
-            // boot-time check (submitted later) supersedes it in the pool's
-            // newest-wins ordering and the run resolves { cancelled }.
             let run_now = run_now.clone();
             spawn_local(async move {
                 let _ = preloadRust(&JsValue::NULL).await;
@@ -587,10 +542,8 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
         });
     }
 
-
     let on_example = {
-        let code = code.clone();
-        let egui_ctx = egui_ctx.clone();
+        let ed = ed.clone();
         let run_now = run_now.clone();
         move |ev: leptos::ev::Event| {
             let src = match event_target_value(&ev).as_str() {
@@ -598,18 +551,21 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                 "fib" => EX_FIB,
                 _ => DEFAULT_SRC,
             };
-            *code.borrow_mut() = src.to_string();
             // Programmatic buffer changes don't fire the editor's on_edit, so persist explicitly.
+            ed.set(src.to_string());
             save_src(src);
-            if let Some(ctx) = egui_ctx.borrow().as_ref() {
-                ctx.request_repaint();
-            }
             run_now();
         }
     };
 
     view! {
-        <div class="pg">
+        // show-code / show-out only bite under html.is-narrow, where the two
+        // panes are tabbed instead of side by side.
+        <div
+            class="pg"
+            class:show-code=move || pane.get() == Pane::Code
+            class:show-out=move || pane.get() == Pane::Out
+        >
             <div class="pg-toolbar">
                 <div class="btnset">
                     // Static label (no layout shift during live auto-run);
@@ -621,21 +577,36 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
                         <option value="fizzbuzz">"Example: FizzBuzz"</option>
                         <option value="fib">"Example: Fibonacci"</option>
                     </select>
-                    <label class="pg-autorun" title="Compile & run on every keystroke; a newer keystroke cancels the compile in flight.">
-                        <input
-                            type="checkbox"
-                            prop:checked=move || autorun.get()
-                            on:change=move |ev| {
-                                let on = event_target_checked(&ev);
-                                set_autorun.set(on);
-                                save_autorun(on);
-                            }
-                        />
-                        "auto-run"
-                    </label>
                     <button class="btn" on:click=move |_| set_help.update(|h| *h = !*h)>"?"</button>
                 </div>
+                {editor::editor_settings(prefs, "btn")}
+                <label class="pg-autorun" title="Compile & run on every keystroke; a newer keystroke cancels the compile in flight.">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || autorun.get()
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            set_autorun.set(on);
+                            save_autorun(on);
+                        }
+                    />
+                    "auto-run"
+                </label>
                 <div class="pg-spacer"></div>
+            </div>
+
+            <div class="pg-tabs" role="tablist">
+                <button
+                    class="pg-tab"
+                    class:cur=move || pane.get() == Pane::Code
+                    on:click=move |_| set_pane.set(Pane::Code)
+                >"Code"</button>
+                <button
+                    class="pg-tab"
+                    class:cur=move || pane.get() == Pane::Out
+                    class:badge=move || out_badge.get()
+                    on:click=move |_| { set_pane.set(Pane::Out); set_out_badge.set(false); }
+                >"Output"</button>
             </div>
 
             {move || help.get().then(|| view! {
@@ -643,7 +614,22 @@ fn PlaygroundView(active: Signal<bool>) -> impl IntoView {
             })}
 
             <div class="pg-body">
-                <canvas class="pg-editor" tabindex="0" node_ref=canvas_ref></canvas>
+                // canvas + textarea are ONE grid item; CSS picks which shows.
+                <div class="pg-editorpane">
+                    {editor::code_editor(
+                        ed.clone(),
+                        on_edit.clone(),
+                        diags.clone(),
+                        active,
+                        touch,
+                        "editor",
+                        "pg-editor",
+                        "pg-editor-text",
+                    )}
+                    {move || editnote.get().map(|(is_err, text)| view! {
+                        <div class="pg-editnote" class:err=is_err id="editnote">{text}</div>
+                    })}
+                </div>
                 <div class="pg-outpane">
                     <div class="pg-output" id="output">
                         {move || {
@@ -765,9 +751,45 @@ fn site_from_hash() -> Site {
     }
 }
 
+/// Coarse pointer (or a viewport too narrow to hit a caret on): use the
+/// textarea editor. Deliberately not the same query as `NARROW` — a desktop
+/// window narrowed past the layout breakpoint keeps the egui editor.
+const Q_TOUCH: &str = "(hover: none) and (pointer: coarse), (max-width: 720px)";
+/// Phone-width layout: one pane at a time, sidebar as a drawer.
+const Q_NARROW: &str = "(max-width: 720px)";
+
 #[component]
 fn App() -> impl IntoView {
     let (site, set_site) = signal(site_from_hash());
+
+    // The two mode signals, mirrored onto <html> as `.is-touch` / `.is-narrow`.
+    // Every mobile CSS rule keys off those classes rather than a raw @media, so
+    // the stylesheet and the "did we boot eframe?" decision can never disagree
+    // (a 700px desktop window matches max-width:720px but is not coarse-pointer,
+    // and showing the textarea there while eframe ran would give two live
+    // editors on one buffer).
+    let touch = editor::media_signal(Q_TOUCH);
+    let narrow = editor::media_signal(Q_NARROW);
+
+    // Text size + wrap mode for the touch editor, restored from localStorage and
+    // pushed back to <html> whenever either changes.
+    let prefs = EditorPrefs::load();
+    Effect::new(move |_| prefs.apply());
+    Effect::new(move |_| {
+        let touch = touch.get();
+        let narrow = narrow.get();
+        editor::publish_mode(if touch { "textarea" } else { "canvas" });
+        let Some(html) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.document_element())
+        else {
+            return;
+        };
+        let cl = html.class_list();
+        let _ = cl.toggle_with_force("is-touch", touch);
+        let _ = cl.toggle_with_force("is-narrow", narrow);
+    });
+
     // Back/forward + manual hash edits switch views too.
     window_event_listener(leptos::ev::hashchange, move |_| set_site.set(site_from_hash()));
     let goto = move |s: Site| {
@@ -803,10 +825,19 @@ fn App() -> impl IntoView {
             >"Rustlings"</button>
         </nav>
         <div class="site-view" class:hidden=move || site.get() != Site::Playground>
-            <PlaygroundView active=Signal::derive(move || site.get() == Site::Playground) />
+            <PlaygroundView
+                active=Signal::derive(move || site.get() == Site::Playground)
+                touch=touch
+                prefs=prefs
+            />
         </div>
         <div class="site-view" class:hidden=move || site.get() != Site::Rustlings>
-            <RustlingsView active=Signal::derive(move || site.get() == Site::Rustlings) />
+            <RustlingsView
+                active=Signal::derive(move || site.get() == Site::Rustlings)
+                narrow=narrow
+                touch=touch
+                prefs=prefs
+            />
         </div>
         <div class="site-view" class:hidden=move || site.get() != Site::About>
             <AboutView />

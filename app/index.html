@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- viewport-fit=cover pairs with the env(safe-area-inset-*) padding below;
+       interactive-widget=resizes-content asks Chrome/Android to shrink the
+       layout viewport when the soft keyboard opens (iOS needs the
+       visualViewport script further down instead). -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Weblings</title>
   <!-- runner.js FIRST: the Rustlings view calls window.loadExercisesJson immediately
        on mount, so window.* must exist before trunk's wasm bootstrap runs. -->
@@ -25,22 +29,25 @@
       --mono:"Source Code Pro",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
     }
     *{box-sizing:border-box;}
-    html,body{margin:0;height:100%;background:var(--page);color:var(--ink);font-family:var(--ui);font-size:16px;}
+    html,body{margin:0;height:100%;background:var(--page);color:var(--ink);font-family:var(--ui);font-size:16px;-webkit-text-size-adjust:100%;}
     /* The app is a fixed viewport-height column; panes scroll internally, never the page. */
-    body{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
-    .site-nav{display:flex;align-items:center;gap:.15rem;padding:0 .75rem;background:#33322e;color:#ddd;flex:0 0 2.3rem;}
+    body{display:flex;flex-direction:column;height:100vh;overflow:hidden;overscroll-behavior:none;}
+    /* dvh tracks the mobile URL bar; --app-h (set from visualViewport, below) also
+       tracks the soft keyboard. The 100vh above stays as the last-resort fallback. */
+    body{height:var(--app-h,100dvh);padding-top:env(safe-area-inset-top);}
+    .site-nav{display:flex;align-items:center;gap:.15rem;padding:0 max(.75rem,env(safe-area-inset-right)) 0 max(.75rem,env(safe-area-inset-left));background:#33322e;color:#ddd;flex:0 0 2.3rem;}
     .site-brand{font-weight:700;font-size:.95rem;margin-right:.9rem;letter-spacing:.02em;border:0;background:none;color:#f0e6d2;height:2.3rem;padding:0 .2rem;cursor:pointer;font-family:var(--ui);border-bottom:3px solid transparent;}
-    .site-brand:hover{color:#fff;}
+    @media (hover:hover){.site-brand:hover{color:#fff;}}
     .site-brand.cur{border-bottom-color:var(--accent,#a42);}
     .pg-autorun{display:flex;align-items:center;gap:.3rem;font-size:.78rem;color:#555;text-transform:uppercase;letter-spacing:.02em;padding:0 .5em;cursor:pointer;user-select:none;}
-    .about{height:100%;overflow:auto;background:#fff;}
+    .about{height:100%;overflow:auto;background:#fff;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
     .about-inner{max-width:46rem;margin:0 auto;padding:2.2rem 1.4rem 4rem;line-height:1.6;font-size:1rem;}
     .about-inner h1{font-size:1.5rem;margin:0 0 .4rem;}
     .about-inner h2{font-size:1.05rem;margin:1.6rem 0 .3rem;}
     .about-inner > p:first-of-type{color:#555;font-size:1.02rem;}
-    .about-inner code{background:#f0f0ec;padding:0 .25em;border-radius:3px;font-family:var(--mono);font-size:.9em;}
+    .about-inner code{background:#f0f0ec;padding:0 .25em;border-radius:3px;font-family:var(--mono);font-size:.9em;overflow-wrap:anywhere;}
     .site-tab{height:2.3rem;padding:0 1rem;border:0;background:none;color:#bbb;font-family:var(--ui);font-size:.85rem;font-weight:600;text-transform:uppercase;letter-spacing:.03em;cursor:pointer;border-bottom:3px solid transparent;}
-    .site-tab:hover{color:#fff;}
+    @media (hover:hover){.site-tab:hover{color:#fff;}}
     .site-tab.cur{color:#fff;border-bottom-color:var(--accent, #a42);}
     .site-view{flex:1;min-height:0;position:relative;}
     .site-view.hidden{display:none;}
@@ -58,21 +65,24 @@
     }
     .btnset > .btn:first-child{border-left-width:1px;border-radius:var(--radius) 0 0 var(--radius);}
     .btnset > .btn:last-child{border-radius:0 var(--radius) var(--radius) 0;}
-    .btnset > .btn:hover{background:#f3f3f0;}
+    @media (hover:hover){.btnset > .btn:hover{background:#f3f3f0;}}
     .btnset > .btn:disabled{opacity:.6;cursor:default;}
     .btn-primary{background:var(--run)!important;border-color:var(--run-border)!important;color:#fff!important;}
-    .btn-primary:hover{background:var(--run-hover)!important;}
+    @media (hover:hover){.btn-primary:hover{background:var(--run-hover)!important;}}
     select.btn{-webkit-appearance:none;appearance:none;padding-right:1.6em;}
 
     .pg-body{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0;}
-    .pg-editor{width:100%;height:100%;display:block;background:#282828;border-right:1px solid var(--border);}
+    /* The editor pane is a column so the mobile diagnostics strip can sit under
+       the textarea; it also keeps canvas + textarea as ONE grid item. */
+    .pg-editorpane{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--border);}
+    .pg-editor{flex:1;width:100%;min-height:0;display:block;background:#282828;}
     .pg-outpane{display:flex;flex-direction:column;min-height:0;background:var(--output);}
     /* min-height:0 lets long output scroll inside the pane instead of growing the page. */
-    .pg-output{flex:1;min-height:0;margin:0;padding:.9rem 1rem;overflow:auto;font-family:var(--mono);font-size:.95rem;line-height:1.5;white-space:pre-wrap;color:#333;}
+    .pg-output{flex:1;min-height:0;margin:0;padding:.9rem 1rem;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;font-family:var(--mono);font-size:.95rem;line-height:1.5;white-space:pre-wrap;color:#333;}
     /* Collapsible output sections (Errors / Standard Error / Standard Output). */
     .pg-sec-head{display:block;width:100%;text-align:left;border:0;background:none;padding:.1rem 0;margin:0 0 .15rem;
       font-family:var(--ui);font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#999;cursor:pointer;}
-    .pg-sec-head:hover{color:#444;}
+    @media (hover:hover){.pg-sec-head:hover{color:#444;}}
     .pg-sec-body{margin:0 0 .9rem;font:inherit;white-space:pre-wrap;}
     .pg-sec-body.collapsed{display:none;}
     .pg-output .err{color:var(--err);}
@@ -93,8 +103,8 @@
     .pg-output .fg-white{color:#333;}
     .pg-trunc{display:flex;align-items:center;gap:.75rem;border-top:1px solid var(--border);padding:.45rem 1rem;font-size:.82rem;color:#666;font-family:var(--mono);}
     .pg-trunc button{height:2em;padding:0 .9em;border:1px solid var(--border);border-radius:var(--radius);background:#fff;color:var(--ink);font-family:var(--ui);font-size:.78rem;font-weight:600;cursor:pointer;}
-    .pg-trunc button:hover{background:#f3f3f0;}
-    .pg-status{border-top:1px solid var(--border);padding:.4rem 1rem;font-size:.78rem;color:#666;font-family:var(--mono);min-height:1.7em;}
+    @media (hover:hover){.pg-trunc button:hover{background:#f3f3f0;}}
+    .pg-status{border-top:1px solid var(--border);padding:.4rem 1rem calc(.4rem + env(safe-area-inset-bottom));font-size:.78rem;color:#666;font-family:var(--mono);min-height:1.7em;}
 
     .pg-help{position:absolute;top:3.1rem;left:.75rem;z-index:10;max-width:32rem;background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:.4rem 1rem;font-size:.88rem;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.15);}
     .pg-help p{margin:.5rem 0;}
@@ -106,28 +116,28 @@
     #pg-loading-bar{height:100%;width:0%;background:#e6a23c;border-radius:999px;transition:width .15s linear;}
     #pg-loading-text{font-size:.78rem;color:#666;font-family:var(--mono);}
     #pg-loading small{font-size:.7rem;color:#999;}
-
+    /* Real @media, not html.is-narrow: the overlay is live before wasm mounts. */
     @media (max-width:720px){
-      .pg-body{grid-template-columns:1fr;grid-template-rows:1fr 1fr;}
-      .pg-editor{border-right:0;border-bottom:1px solid var(--border);}
+      #pg-loading{left:.5rem;right:.5rem;bottom:calc(.5rem + env(safe-area-inset-bottom));}
+      #pg-loading-track{width:auto;}
     }
 
     /* ---- Rustlings trainer view ---- */
-    .tr{display:flex;height:100%;}
+    .tr{display:flex;height:100%;position:relative;}
     /* Sidebar */
     .tr-side{width:290px;flex:0 0 290px;display:flex;flex-direction:column;min-height:0;background:#eceae4;border-right:1px solid var(--border);}
     .tr-brand{padding:.7rem .85rem;font-weight:700;border-bottom:1px solid var(--border);}
     .tr-progress{padding:.45rem .85rem;font-size:.82rem;color:#666;border-bottom:1px solid var(--border);}
-    .tr-list{flex:1;overflow:auto;padding:.25rem 0;}
+    .tr-list{flex:1;overflow:auto;padding:.25rem 0;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}
     .tr-item{display:flex;align-items:center;gap:.4rem;width:100%;text-align:left;border:0;background:none;
       padding:.32rem .85rem;font-family:var(--mono);font-size:.84rem;color:var(--ink);cursor:pointer;border-left:3px solid transparent;}
-    .tr-item:hover{background:#e3e0d8;}
-    .tr-item.cur{background:#dcd8cf;border-left-color:var(--accent);font-weight:600;}
+    @media (hover:hover){.tr-item:hover{background:#e3e0d8;}}
+    .tr-item.cur{background:#dcd8cf;border-left-color:var(--accent,#a42);font-weight:600;}
     .tr-item.done .tr-item-name::before{content:"✓ ";color:var(--ok);font-weight:700;}
     .tr-item-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
     .tr-badge{font-size:.6rem;text-transform:uppercase;letter-spacing:.03em;background:#d8d2c4;color:#7a6a3a;padding:.02rem .3rem;border-radius:3px;}
     .tr-clear{display:block;width:100%;text-align:left;padding:.5rem .85rem;font-size:.68rem;color:#a55;background:none;border:0;border-top:1px solid var(--border);cursor:pointer;font-family:var(--ui);}
-    .tr-clear:hover{color:#c33;text-decoration:underline;}
+    @media (hover:hover){.tr-clear:hover{color:#c33;text-decoration:underline;}}
     /* Main */
     .tr-main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;}
     .tr-toolbar{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;border-bottom:1px solid var(--border);}
@@ -136,18 +146,175 @@
     .tr-spacer{flex:1;}
     .tr-btn{height:2.2em;padding:0 .85em;border:1px solid var(--border);background:#fff;color:var(--ink);
       border-radius:var(--radius);font-family:var(--ui);font-size:.84rem;font-weight:600;text-transform:uppercase;cursor:pointer;}
-    .tr-btn:hover{background:#f3f3f0;}
+    @media (hover:hover){.tr-btn:hover{background:#f3f3f0;}}
     .tr-hint{margin:.5rem .75rem 0;padding:.5rem .75rem;background:#fff;border:1px solid var(--border);
       border-left:3px solid var(--warn);border-radius:var(--radius);font-size:.82rem;white-space:pre-wrap;}
-    .tr-editorwrap{flex:1;min-height:0;padding:.5rem .75rem;}
-    .tr-editor{width:100%;height:100%;display:block;background:#282828;border:1px solid #30363d;border-radius:var(--radius);}
+    .tr-editorwrap{flex:1;display:flex;flex-direction:column;min-height:0;padding:.5rem .75rem;}
+    .tr-editor{flex:1;width:100%;min-height:0;display:block;background:#282828;border:1px solid #30363d;border-radius:var(--radius);}
     .tr-diagwrap{height:34%;min-height:120px;padding:0 .75rem .25rem;}
-    .tr-diag{margin:0;height:100%;overflow:auto;background:#f9ffff;border:1px solid var(--border);border-radius:var(--radius);
+    .tr-diag{margin:0;height:100%;overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;background:#f9ffff;border:1px solid var(--border);border-radius:var(--radius);
       padding:.6rem .8rem;font-family:var(--mono);font-size:.8rem;line-height:1.45;white-space:pre-wrap;color:#333;}
     .tr-diag.ok{border-color:#bfe0bf;color:#2e5d2e;} .tr-diag.warn{border-color:#e6cf9a;} .tr-diag.err{border-color:#e6b3b3;color:var(--err);}
-    .tr-statusbar{padding:.35rem .8rem;font-family:var(--mono);font-size:.78rem;color:#666;border-top:1px solid var(--border);min-height:1.6em;}
-    @media (max-width:760px){ .tr-side{width:200px;flex-basis:200px;} }
+    .tr-statusbar{padding:.35rem .8rem calc(.35rem + env(safe-area-inset-bottom));font-family:var(--mono);font-size:.78rem;color:#666;border-top:1px solid var(--border);min-height:1.6em;}
+
+    /* ================= Mobile =================
+       Two classes, both set on <html> from Rust (App) off matchMedia:
+         .is-touch  — coarse pointer (or very narrow): plain <textarea> editor
+                      instead of the egui canvas, so you get the native caret,
+                      selection handles and copy/paste. eframe is NOT booted.
+         .is-narrow — phone-width layout: one pane at a time behind Code/Output
+                      tabs, sidebar as a drawer.
+       Driving both from Rust rather than raw @media keeps the CSS and the eframe
+       boot decision from ever disagreeing (a 700px desktop window matches
+       max-width:720px but is not coarse-pointer). */
+
+    /* --- textarea editor (shared by both views) ---
+       A transparent-text <textarea> stacked exactly on top of a <pre> holding
+       the syntax-highlighted copy of the same text (editor.rs::highlight_html,
+       using egui_code_editor's own lexer + gruvbox colors). The browser draws
+       the caret, selection handles and copy/paste menu; the <pre> draws the
+       colors. The two MUST share every metric that affects wrapping — font,
+       size, line-height, padding, white-space, overflow-wrap — or the glyphs
+       drift apart. */
+    .ed-wrap{display:none;position:relative;flex:1;width:100%;min-height:0;background:#282828;}
+    html.is-touch .ed-wrap{display:block;}
+    .ed-hl,.pg-editor-text,.tr-editor-text{
+      position:absolute;inset:0;margin:0;border:0;
+      font-family:var(--mono);line-height:1.45;tab-size:4;
+      padding:.6rem .7rem;
+      /* --ed-font and .ed-nowrap are set on <html> by editor.rs (EditorPrefs),
+         so BOTH layers change together. Anything that affects wrapping must be
+         driven from one place or the glyphs drift out from under the caret. */
+      font-size:var(--ed-font,16px);
+      /* Soft-wrap by default: no newlines are inserted into the buffer, but
+         nothing ends up off-screen either. Horizontal panning a code pane on a
+         phone is worse. The "Aa" menu turns it off for those who want it. */
+      white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;
+    }
+    html.ed-nowrap .ed-hl,
+    html.ed-nowrap .pg-editor-text,
+    html.ed-nowrap .tr-editor-text{white-space:pre;overflow-wrap:normal;}
+    .ed-hl{color:#ebdbb2;overflow:hidden;pointer-events:none;z-index:0;}
+    .pg-editor-text,.tr-editor-text{
+      z-index:1;resize:none;outline:0;background:transparent;
+      /* The glyphs come from .ed-hl underneath; only the caret is ours. */
+      color:transparent;-webkit-text-fill-color:transparent;caret-color:#fe8019;
+      overflow:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+    }
+    /* Translucent, so selected text stays readable through the highlight layer. */
+    .pg-editor-text::selection,.tr-editor-text::selection{background:rgba(131,165,152,.45);}
+    /* Same inset frame the Rustlings canvas has. */
+    .tr-editorwrap .ed-wrap{border:1px solid #30363d;border-radius:var(--radius);}
+    html.is-touch .pg-editor,html.is-touch .tr-editor{display:none;}
+    /* Without the canvas there are no squiggles and no hover tooltips, so the
+       latest check result gets its own strip under the editor. */
+    .pg-editnote{display:none;flex:0 0 auto;max-height:5em;overflow:auto;padding:.4rem .7rem;
+      background:#3c3836;color:#fbf1c7;border-top:1px solid #504945;
+      font-family:var(--mono);font-size:.75rem;line-height:1.4;white-space:pre-wrap;}
+    .pg-editnote.err{color:#fb4934;}
+    html.is-touch .pg-editnote{display:block;}
+
+    /* --- "Aa" text-size / wrap popover (touch editor only) --- */
+    .ed-tools{display:none;}
+    html.is-narrow .ed-tools{display:inline-block;}
+    /* The popover is anchored to the TOOLBAR, not to the button: the button can
+       sit anywhere in a wrapped toolbar, and a button-anchored panel runs off
+       the right edge of a phone. Spanning the toolbar always fits. */
+    .pg-toolbar,.tr-toolbar{position:relative;}
+    /* In the Playground the button sits outside .btnset, so it needs the pill
+       styling that `.btnset > .btn` would otherwise have given it. */
+    .pg-toolbar .ed-btn{height:2.6em;padding:0 1em;border:1px solid var(--border);
+      border-radius:var(--radius);background:#fff;color:var(--ink);font-family:var(--ui);
+      font-size:.85rem;font-weight:600;letter-spacing:.02em;cursor:pointer;}
+    .ed-scrim{position:fixed;inset:0;z-index:65;}
+    .ed-menu{position:absolute;top:calc(100% + .35rem);left:.5rem;right:.5rem;z-index:70;
+      background:#fff;border:1px solid var(--border);border-radius:var(--radius);
+      box-shadow:0 6px 20px rgba(0,0,0,.18);padding:.25rem 0;}
+    .ed-menu-row{display:flex;align-items:center;gap:.5rem;padding:.4rem .7rem;
+      font-size:.85rem;color:var(--ink);}
+    label.ed-menu-row{cursor:pointer;user-select:none;}
+    .ed-menu-label{flex:1;text-align:left;}
+    .ed-menu-row input{width:1.15rem;height:1.15rem;flex:0 0 auto;}
+    .ed-menu-val{min-width:3.4em;text-align:center;font-family:var(--mono);font-size:.8rem;}
+    .ed-step{width:36px;height:36px;flex:0 0 auto;border:1px solid var(--border);
+      border-radius:var(--radius);background:#fff;color:var(--ink);
+      font-size:1.1rem;line-height:1;cursor:pointer;}
+    .ed-step:disabled{opacity:.4;cursor:default;}
+
+    /* --- Code | Output tabs --- */
+    .pg-tabs{display:none;}
+    html.is-narrow .pg-tabs{display:flex;background:var(--page);border-bottom:1px solid var(--border);}
+    .pg-tab{flex:1;min-height:44px;position:relative;border:0;background:none;color:#777;
+      font-family:var(--ui);font-size:.82rem;font-weight:700;text-transform:uppercase;
+      letter-spacing:.03em;border-bottom:3px solid transparent;cursor:pointer;}
+    .pg-tab.cur{color:var(--ink);border-bottom-color:var(--accent,#a42);}
+    .pg-tab.badge::after{content:"";position:absolute;top:.75rem;right:.9rem;
+      width:.5rem;height:.5rem;border-radius:999px;background:var(--err);}
+
+    /* --- narrow: nav + playground --- */
+    html.is-narrow .site-nav{flex:0 0 2.75rem;}
+    html.is-narrow .site-brand,html.is-narrow .site-tab{height:2.75rem;}
+    html.is-narrow .site-brand{margin-right:.5rem;}
+    html.is-narrow .site-tab{padding:0 .75rem;}
+    html.is-narrow .pg-toolbar{flex-wrap:wrap;gap:.5rem;padding:.5rem;}
+    html.is-narrow .btnset{flex-wrap:wrap;}
+    html.is-narrow .pg-autorun{min-height:44px;}
+    html.is-narrow .pg-autorun input{width:1.15rem;height:1.15rem;}
+    html.is-narrow .pg-sec-head{min-height:40px;padding:.5rem 0;}
+    html.is-narrow .pg-body{grid-template-columns:1fr;grid-template-rows:1fr;}
+    html.is-narrow .pg-editorpane{border-right:0;}
+    html.is-narrow .pg.show-code .pg-outpane{display:none;}
+    html.is-narrow .pg.show-out .pg-editorpane{display:none;}
+    html.is-narrow .pg-help{position:fixed;top:auto;left:.5rem;right:.5rem;
+      bottom:calc(.5rem + env(safe-area-inset-bottom));z-index:60;
+      max-width:none;max-height:60vh;overflow:auto;}
+
+    /* --- narrow: rustlings --- */
+    .tr-scrim{position:absolute;inset:0;z-index:15;background:rgba(0,0,0,.35);}
+    .tr-menu,.tr-step{display:none;}
+    html.is-narrow .tr-menu,html.is-narrow .tr-step{display:inline-block;}
+    html.is-narrow .tr-side{position:absolute;inset:0 auto 0 0;z-index:20;
+      width:min(84vw,290px);flex-basis:auto;transform:translateX(-100%);
+      transition:transform .2s ease;box-shadow:2px 0 12px rgba(0,0,0,.25);}
+    html.is-narrow .tr-side.open{transform:none;}
+    html.is-narrow .tr-item{min-height:44px;padding:.6rem .85rem;}
+    /* Explicit px, NOT the base rule's `height:2.2em` — the icon buttons below
+       set a larger font-size, and an em height would make them taller than the
+       labelled ones. One number keeps the whole row flush. */
+    html.is-narrow .tr-btn{height:40px;min-height:0;padding:0 .55em;font-size:.78rem;}
+    /* ☰ / ‹ / › are single glyphs: square target, glyph sized to fill it. */
+    html.is-narrow .tr-menu,html.is-narrow .tr-step{
+      width:40px;padding:0;font-size:1.15rem;line-height:1;font-weight:400;}
+    /* Six buttons plus a status line that can run long ("compiles ✓ — remove the
+       remaining todo!()"). Give the status its own row so the button row stays
+       one row, instead of letting the wrap point move around as you work. */
+    html.is-narrow .tr-toolbar{flex-wrap:wrap;gap:.3rem;padding:.3rem .5rem;}
+    html.is-narrow .tr-stat{order:-1;flex:1 0 100%;font-size:.8rem;line-height:1.3;}
+    html.is-narrow .tr-spacer{display:none;}
+    html.is-narrow .tr-hint{margin:.5rem .5rem 0;}
+    html.is-narrow .tr-editorwrap{padding:.4rem .5rem;}
+    html.is-narrow .tr.show-code .tr-diagwrap{display:none;}
+    html.is-narrow .tr.show-out .tr-editorwrap{display:none;}
+    html.is-narrow .tr.show-out .tr-diagwrap{flex:1;height:auto;min-height:0;padding:.5rem;}
+    html.is-narrow .about-inner{padding:1.4rem 1rem calc(3rem + env(safe-area-inset-bottom));}
   </style>
+  <!-- iOS does not resize the layout viewport for the soft keyboard, so the
+       bottom of the editor would sit under it. Track the visual viewport into
+       --app-h instead. Coarse-pointer only: on desktop, visualViewport also
+       shrinks on pinch-zoom and the app must NOT follow that. -->
+  <script>
+    (function () {
+      var vv = window.visualViewport;
+      if (!vv || !window.matchMedia("(pointer: coarse)").matches) return;
+      var apply = function () {
+        document.documentElement.style.setProperty("--app-h", vv.height + "px");
+        window.scrollTo(0, 0); // iOS scrolls the layout viewport when the keyboard opens
+      };
+      vv.addEventListener("resize", apply);
+      vv.addEventListener("scroll", apply);
+      apply();
+    })();
+  </script>
 </head>
 <body>
   <!-- Toolchain preload overlay: driven by runner.js's auto-preload (bundle +
@@ -155,6 +322,11 @@
        appends alongside it. -->
   <div id="pg-loading">
     <h2>Downloading the Rust toolchain</h2>
-    <div id="pg-loading-track"><div id="pg-loading-bar"></div><
+    <div id="pg-loading-track"><div id="pg-loading-bar"></div></div>
+    <div id="pg-loading-text">starting…</div>
+    <!-- runner.js fills in the real byte total on the first progress tick, so
+         the figure can never drift from public/rustc/assets-meta.json. -->
+    <small id="pg-loading-size"></small>
+  </div>
 </body>
 </html>
