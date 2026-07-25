@@ -142,7 +142,10 @@ const KEY_FONT: &str = "editor_font_px";
 const KEY_WRAP: &str = "editor_wrap";
 const FONT_MIN: u32 = 12;
 const FONT_MAX: u32 = 24;
+/// Also the threshold below which iOS starts auto-zooming focused fields.
 const FONT_DEFAULT: u32 = 16;
+/// Appended to the viewport meta while the chosen text is below `FONT_DEFAULT`.
+const ZOOM_LOCK: &str = ", maximum-scale=1";
 
 fn storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
@@ -180,16 +183,37 @@ impl EditorPrefs {
             let _ = s.set_item(KEY_FONT, &font.to_string());
             let _ = s.set_item(KEY_WRAP, if wrap { "1" } else { "0" });
         }
-        let Some(html) = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.document_element())
-        else {
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
-        if let Some(el) = html.dyn_ref::<web_sys::HtmlElement>() {
-            let _ = el.style().set_property("--ed-font", &format!("{font}px"));
+        if let Some(html) = doc.document_element() {
+            if let Some(el) = html.dyn_ref::<web_sys::HtmlElement>() {
+                let _ = el.style().set_property("--ed-font", &format!("{font}px"));
+            }
+            let _ = html.class_list().toggle_with_force("ed-nowrap", !wrap);
         }
-        let _ = html.class_list().toggle_with_force("ed-nowrap", !wrap);
+
+        // iOS Safari auto-zooms the page whenever a focused field's text is
+        // smaller than 16px, and you then have to pinch back out. `maximum-scale`
+        // suppresses that. Doing it HERE rather than on focus is deliberate: the
+        // zoom begins with the focus event, so a focus hook is inherently a race.
+        //
+        // The base string is read back out of the tag rather than duplicated from
+        // index.html — this must not drift if that meta is ever edited — and
+        // splitting on the suffix keeps it idempotent (apply() also runs on wrap
+        // changes). Note iOS ignores maximum-scale for *pinch* zoom since iOS 10
+        // and only honours it for this auto-zoom path; Android Chrome does
+        // disable pinch, which is why this is gated on explicitly choosing
+        // sub-16px text rather than applied unconditionally.
+        if let Ok(Some(meta)) = doc.query_selector("meta[name=viewport]") {
+            let content = meta.get_attribute("content").unwrap_or_default();
+            let base = content.split(ZOOM_LOCK).next().unwrap_or(&content).to_string();
+            let want =
+                if font < FONT_DEFAULT { format!("{base}{ZOOM_LOCK}") } else { base };
+            if content != want {
+                let _ = meta.set_attribute("content", &want);
+            }
+        }
     }
 }
 
@@ -310,6 +334,38 @@ pub fn publish_mode(mode: &str) {
     }
 }
 
+/// Focus mode: while the touch editor holds focus, the phone layout drops the
+/// site nav, the toolbar and the Code/Output tabs (~160-200px) and shows the
+/// slim `.ed-bar` instead. Toggled imperatively from the focus/blur handlers
+/// rather than through a signal + `Effect` — effects run asynchronously in
+/// Leptos 0.7, so the class would lag the focus event by a tick, and nothing
+/// needs it reactively (the bar's visibility is pure CSS).
+///
+/// Self-healing: switching views `display:none`s the focused textarea, the
+/// browser blurs it, and the class clears on its own.
+fn set_editing(on: bool) {
+    if let Some(html) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.document_element())
+    {
+        let _ = html.class_list().toggle_with_force("is-editing", on);
+    }
+}
+
+/// What each view puts in the focus-mode bar. Grouped rather than passed as four
+/// more positional arguments: `action_label` would otherwise be a fourth
+/// adjacent `&'static str` next to `id`/`canvas_class`/`text_class`, which the
+/// compiler cannot tell apart if two are transposed.
+#[derive(Clone)]
+pub struct EditorChrome {
+    pub verdict: Signal<String>,
+    /// "ok" | "warn" | "err" | "" — mirrors the `.tr-stat` colour classes.
+    pub verdict_class: Signal<&'static str>,
+    /// "Run" (Playground) | "Output" (Rustlings).
+    pub action_label: &'static str,
+    pub on_action: Rc<dyn Fn()>,
+}
+
 /// Mount both editor surfaces (only one is ever visible, and eframe is booted
 /// only in canvas mode). CSS — `html.is-touch` — does the showing/hiding; see
 /// `index.html`.
@@ -326,7 +382,14 @@ pub fn code_editor(
     id: &'static str,
     canvas_class: &'static str,
     text_class: &'static str,
+    chrome: EditorChrome,
 ) -> impl IntoView {
+    // Destructured up front on purpose: reactive closures inside `view!` must be
+    // `Send`, and `{move || chrome.verdict.get()}` would capture the whole struct
+    // — including the `Rc` — failing that bound with an error pointing at the
+    // macro rather than at the `Rc`. Event handlers have no such bound (tachys
+    // wraps them in a `SendWrapper`), so `on_action` is fine where it is used.
+    let EditorChrome { verdict, verdict_class, action_label, on_action } = chrome;
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     let ta_ref = NodeRef::<leptos::html::Textarea>::new();
     let hl_ref = NodeRef::<leptos::html::Pre>::new();
@@ -438,8 +501,43 @@ pub fn code_editor(
         }
     };
 
+    let blur_editor = move || {
+        if let Some(ta) = ta_ref.get_untracked() {
+            let _ = ta.blur();
+        }
+    };
+    // Holding focus through the tap is what makes the bar's buttons work at all.
+    // Without it: the tap blurs the textarea -> `blur` clears `is-editing` ->
+    // `.ed-bar` goes `display:none` SYNCHRONOUSLY -> `mouseup` hit-tests fresh,
+    // the button is gone, and `click` dispatches on an ancestor instead, so the
+    // handler never runs. Cancelling `mousedown` suppresses the focus change
+    // (on iOS the focus move *is* that event's default action), leaving `click`
+    // to fire normally on a button that still exists. Each handler then blurs
+    // explicitly, or the keyboard would never come down.
+    let hold_focus = |ev: leptos::ev::MouseEvent| ev.prevent_default();
+    let on_done = move |_| blur_editor();
+    let on_action_click = move |_| {
+        blur_editor();
+        on_action();
+    };
+
     view! {
         <canvas class=canvas_class tabindex="0" node_ref=canvas_ref></canvas>
+        // Focus mode's only chrome. Always in the DOM; CSS reveals it under
+        // html.is-narrow.is-editing.
+        <div class="ed-bar">
+            <button class="ed-bar-btn ed-bar-done" on:mousedown=hold_focus on:click=on_done>
+                "Done"
+            </button>
+            <span class=move || format!("ed-verdict {}", verdict_class.get())>
+                {move || verdict.get()}
+            </span>
+            <button
+                class="ed-bar-btn ed-bar-action"
+                on:mousedown=hold_focus
+                on:click=on_action_click
+            >{action_label}</button>
+        </div>
         // Underlay + transparent textarea, exactly overlapping: the browser
         // gives us the caret, selection handles and copy/paste, the <pre>
         // underneath supplies the colors a plain textarea cannot.
@@ -450,6 +548,8 @@ pub fn code_editor(
                 node_ref=ta_ref
                 on:input=on_input
                 on:scroll=on_scroll
+                on:focus=move |_| set_editing(true)
+                on:blur=move |_| set_editing(false)
                 spellcheck="false"
                 autocapitalize="off"
                 autocomplete="off"

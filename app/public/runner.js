@@ -114,23 +114,18 @@ window.preloadRust = function (onProgress) {
       setTimeout(() => el.remove(), 350);
     }
   };
-  let sizeShown = false;
   window.preloadRust((received, total) => {
     const bar = document.getElementById("pg-loading-bar");
     const text = document.getElementById("pg-loading-text");
-    // Quote the real total once we know it, rather than hard-coding a number in
-    // index.html that would drift when the artifacts are rebuilt.
-    if (total && !sizeShown) {
-      const size = document.getElementById("pg-loading-size");
-      if (size) {
-        size.textContent = `${fmtMB(total)} MB`;
-        sizeShown = true;
-      }
-    }
-    if (bar && total) bar.style.width = Math.min(100, (received / total) * 100).toFixed(1) + "%";
-    if (text) text.textContent = total
-      ? `${fmtMB(received)} / ${fmtMB(total)} MB`
-        : `${fmtMB(received)} MB...`;
+    // A PERCENTAGE, not byte counts. `received` and `total` are both
+    // decompressed sizes (the Streams API only ever hands us decoded bytes, and
+    // total comes from assets-meta.json), so their ratio is exact — but the
+    // absolute figures overstate the download by ~3.7x once the host gzips.
+    // One `pct` feeds both the bar and the label so they cannot disagree.
+    const pct = total ? Math.min(100, (received / total) * 100) : 0;
+    if (bar && total) bar.style.width = pct.toFixed(1) + "%";
+    // No total (assets-meta.json failed) means no percentage is possible.
+    if (text) text.textContent = total ? `${pct.toFixed(0)}%` : `${fmtMB(received)} MB...`;
   }).then(() => done(null), (e) => done(e && e.message ? e.message : String(e)));
 }
 

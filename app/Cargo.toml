@@ -14,7 +14,7 @@ js-sys = "0.3"
 # crate's feature list.
 web-sys = { version = "0.3", features = [
     "HtmlCanvasElement", "HtmlTextAreaElement", "HtmlElement", "Window", "Storage", "Location",
-    "MediaQueryList", "Element", "DomTokenList", "CssStyleDeclaration",
+    "MediaQueryList", "Document", "Element", "DomTokenList", "CssStyleDeclaration",
 ] }
 console_error_panic_hook = "0.1"
 # Pure-Rust editor: egui rendered to a canvas via eframe (glow/WebGL2 backend).

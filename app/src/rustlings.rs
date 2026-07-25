@@ -172,6 +172,24 @@ fn stat_label(s: Stat, test: bool, passed: Option<u32>, threads_unsupported: boo
     }
 }
 
+/// `stat_label` for the focus-mode bar, which has ~35 chars between two buttons
+/// on a phone — the full labels run to 52.
+fn stat_short(s: Stat, test: bool, passed: Option<u32>, threads_unsupported: bool) -> String {
+    match s {
+        Stat::Todo => String::new(),
+        Stat::Error => {
+            if test { "✗ tests failed".into() } else { "✗ won't compile".into() }
+        }
+        Stat::Compiles => {
+            if threads_unsupported { "needs threads".into() } else { "✓ compiles".into() }
+        }
+        Stat::Done => match passed {
+            Some(n) if test => format!("✓ {n} test{} pass", if n == 1 { "" } else { "s" }),
+            _ => "✓ done".into(),
+        },
+    }
+}
+
 #[component]
 pub fn RustlingsView(
     active: Signal<bool>,
@@ -511,6 +529,20 @@ pub fn RustlingsView(
         Stat::Todo => "",
     };
 
+    // Rustlings re-checks itself 200 ms after every keystroke, so the focus-mode
+    // action has nothing to trigger — it just takes you to the result.
+    let chrome = editor::EditorChrome {
+        verdict: Signal::derive(move || {
+            stat_short(stat.get(), cur_test.get(), cur_passed.get(), cur_threads_unsup.get())
+        }),
+        verdict_class: Signal::derive(stat_class),
+        action_label: "Output",
+        on_action: Rc::new(move || {
+            set_pane.set(Pane::Out);
+            set_out_badge.set(false);
+        }),
+    };
+
     view! {
         <div
             class="tr"
@@ -614,6 +646,7 @@ pub fn RustlingsView(
                         "trainer-editor",
                         "tr-editor",
                         "tr-editor-text",
+                        chrome,
                     )}
                 </div>
 

@@ -115,7 +115,6 @@
     #pg-loading-track{width:16rem;height:.55rem;background:#e4e4e4;border-radius:999px;overflow:hidden;}
     #pg-loading-bar{height:100%;width:0%;background:#e6a23c;border-radius:999px;transition:width .15s linear;}
     #pg-loading-text{font-size:.78rem;color:#666;font-family:var(--mono);}
-    #pg-loading small{font-size:.7rem;color:#999;}
     /* Real @media, not html.is-narrow: the overlay is live before wasm mounts. */
     @media (max-width:720px){
       #pg-loading{left:.5rem;right:.5rem;bottom:calc(.5rem + env(safe-area-inset-bottom));}
@@ -213,6 +212,42 @@
       font-family:var(--mono);font-size:.75rem;line-height:1.4;white-space:pre-wrap;}
     .pg-editnote.err{color:#fb4934;}
     html.is-touch .pg-editnote{display:block;}
+
+    /* --- Focus mode: while the touch editor holds focus, the phone drops its
+       chrome and shows only this bar. `is-narrow` AND `is-editing`: Q_TOUCH also
+       matches a landscape tablet (is-touch without is-narrow), where the
+       side-by-side layout has room and hiding the nav would be wrong.
+
+       .pg-help is in this list because it is a SIBLING of the toolbar and
+       position:fixed on narrow — hiding .pg-toolbar does not hide it, and it can
+       cover the bar's buttons.
+
+       The drawer and the Aa popover need no defensive close: .tr-scrim and
+       .ed-scrim cover the whole screen while either is open, so the textarea
+       cannot be focused, and once focus mode is on their trigger buttons live in
+       the hidden toolbar. If either scrim is ever removed, revisit this. --- */
+    .ed-bar{display:none;flex:0 0 auto;align-items:center;gap:.5rem;
+      padding:.3rem .5rem;background:var(--page);border-bottom:1px solid var(--border);}
+    html.is-narrow.is-editing .ed-bar{display:flex;}
+    html.is-narrow.is-editing .site-nav,
+    html.is-narrow.is-editing .pg-toolbar,
+    html.is-narrow.is-editing .tr-toolbar,
+    html.is-narrow.is-editing .pg-tabs,
+    html.is-narrow.is-editing .tr-hint,
+    html.is-narrow.is-editing .pg-help{display:none;}
+    /* The bar is the box's header, so drop the wrap's top padding under it. */
+    html.is-narrow.is-editing .tr-editorwrap{padding-top:0;}
+    .ed-bar-btn{height:40px;padding:0 .8em;border:1px solid var(--border);
+      border-radius:var(--radius);background:#fff;color:var(--ink);
+      font-family:var(--ui);font-size:.78rem;font-weight:600;text-transform:uppercase;
+      letter-spacing:.02em;cursor:pointer;flex:0 0 auto;}
+    .ed-bar-action{background:var(--run);border-color:var(--run-border);color:#fff;}
+    /* flex:1 + ellipsis so a longer verdict truncates instead of pushing the
+       action button off a 390px screen. */
+    .ed-verdict{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+      white-space:nowrap;font-size:.8rem;font-weight:600;color:#666;}
+    .ed-verdict.ok{color:var(--ok);} .ed-verdict.warn{color:var(--warn);}
+    .ed-verdict.err{color:var(--err);}
 
     /* --- "Aa" text-size / wrap popover (touch editor only) --- */
     .ed-tools{display:none;}
@@ -323,10 +358,8 @@
   <div id="pg-loading">
     <h2>Downloading the Rust toolchain</h2>
     <div id="pg-loading-track"><div id="pg-loading-bar"></div></div>
+    <!-- A percentage, not bytes: see the comment in runner.js's progress tick. -->
     <div id="pg-loading-text">starting…</div>
-    <!-- runner.js fills in the real byte total on the first progress tick, so
-         the figure can never drift from public/rustc/assets-meta.json. -->
-    <small id="pg-loading-size"></small>
   </div>
 </body>
 </html>

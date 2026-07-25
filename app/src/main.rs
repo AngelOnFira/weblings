@@ -306,6 +306,11 @@ fn PlaygroundView(active: Signal<bool>, touch: Signal<bool>, prefs: EditorPrefs)
     // debounced check's text never reaches the output pane — so a type error
     // would otherwise produce no visible feedback at all until you press Run.
     let (editnote, set_editnote) = signal::<Option<(bool, String)>>(None);
+    // (errors, warnings) from the same check — the focus-mode bar needs a form
+    // short enough to sit between two buttons. Not derived from `editnote`:
+    // that's a formatted string, and `.pg-editnote` renders nothing at all when
+    // the code is clean, so "✓ no errors" is genuinely new information.
+    let (editcounts, set_editcounts) = signal::<Option<(usize, usize)>>(None);
 
     let (autorun, set_autorun) = signal(load_autorun());
 
@@ -323,6 +328,8 @@ fn PlaygroundView(active: Signal<bool>, touch: Signal<bool>, prefs: EditorPrefs)
             let ds = diag::parse_diags(v);
             diag::publish_counts(&ds);
             set_editnote.set(diag_headline(&ds));
+            let errors = ds.iter().filter(|d| d.is_error).count();
+            set_editcounts.set(Some((errors, ds.len() - errors)));
             if pane.get_untracked() == Pane::Code && ds.iter().any(|d| d.is_error) {
                 set_out_badge.set(true);
             }
@@ -448,13 +455,36 @@ fn PlaygroundView(active: Signal<bool>, touch: Signal<bool>, prefs: EditorPrefs)
     // inert on desktop). This lives here and NOT in `run_now`, which auto-run
     // calls on every keystroke: doing it there would yank the pane away as you
     // type.
-    let on_run = {
+    let go_run: Rc<dyn Fn()> = {
         let run_now = run_now.clone();
-        move |_| {
+        Rc::new(move || {
             set_pane.set(Pane::Out);
             set_out_badge.set(false);
             run_now()
-        }
+        })
+    };
+    let on_run = {
+        let go_run = go_run.clone();
+        move |_| go_run()
+    };
+
+    // Focus mode's bar: Run there means "same as Done, but show me the output",
+    // which is exactly what the toolbar's Run already does once the editor blurs.
+    let chrome = editor::EditorChrome {
+        verdict: Signal::derive(move || match editcounts.get() {
+            None => String::new(),
+            Some((0, 0)) => "✓ no errors".into(),
+            Some((0, w)) => format!("{w} warning{}", if w == 1 { "" } else { "s" }),
+            Some((e, _)) => format!("{e} error{}", if e == 1 { "" } else { "s" }),
+        }),
+        verdict_class: Signal::derive(move || match editcounts.get() {
+            None => "",
+            Some((0, 0)) => "ok",
+            Some((0, _)) => "warn",
+            Some(_) => "err",
+        }),
+        action_label: "Run",
+        on_action: go_run,
     };
 
     // Per keystroke: with auto-run on, submit a compile IMMEDIATELY — the
@@ -625,6 +655,7 @@ fn PlaygroundView(active: Signal<bool>, touch: Signal<bool>, prefs: EditorPrefs)
                         "editor",
                         "pg-editor",
                         "pg-editor-text",
+                        chrome,
                     )}
                     {move || editnote.get().map(|(is_err, text)| view! {
                         <div class="pg-editnote" class:err=is_err id="editnote">{text}</div>
